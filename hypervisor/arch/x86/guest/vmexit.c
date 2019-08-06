@@ -65,7 +65,7 @@ static const struct vm_exit_dispatch dispatch_table[NR_VMX_EXIT_REASONS] = {
 	[VMX_EXIT_REASON_INVLPG] = {
 		.handler = unhandled_vmexit_handler,},
 	[VMX_EXIT_REASON_RDPMC] = {
-		.handler = unhandled_vmexit_handler},
+		.handler = undefined_vmexit_handler},
 	[VMX_EXIT_REASON_RDTSC] = {
 		.handler = unhandled_vmexit_handler},
 	[VMX_EXIT_REASON_RSM] = {
@@ -136,7 +136,7 @@ static const struct vm_exit_dispatch dispatch_table[NR_VMX_EXIT_REASONS] = {
 		.handler = ept_misconfig_vmexit_handler,
 		.need_exit_qualification = 1},
 	[VMX_EXIT_REASON_INVEPT] = {
-		.handler = unhandled_vmexit_handler},
+		.handler = undefined_vmexit_handler},
 	[VMX_EXIT_REASON_RDTSCP] = {
 		.handler = unhandled_vmexit_handler},
 	[VMX_EXIT_REASON_VMX_PREEMPTION_TIMER_EXPIRED] = {
@@ -224,9 +224,15 @@ int32_t vmexit_handler(struct acrn_vcpu *vcpu)
 			/* exit dispatch handling */
 			if (basic_exit_reason == VMX_EXIT_REASON_EXTERNAL_INTERRUPT) {
 				/* Handling external_interrupt should disable intr */
-				CPU_IRQ_DISABLE();
+				if (!is_lapic_pt_enabled(vcpu)) {
+					CPU_IRQ_DISABLE();
+				}
+
 				ret = dispatch->handler(vcpu);
-				CPU_IRQ_ENABLE();
+
+				if (!is_lapic_pt_enabled(vcpu)) {
+					CPU_IRQ_ENABLE();
+				}
 			} else {
 				ret = dispatch->handler(vcpu);
 			}

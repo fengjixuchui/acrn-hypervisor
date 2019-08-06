@@ -33,8 +33,9 @@
 #include <errno.h>
 #include <logmsg.h>
 #include "vpci_priv.h"
+#include "pci_dev.h"
 
-static void init_vdevs(const struct acrn_vm *vm);
+static void vpci_init_vdevs(struct acrn_vm *vm);
 static void deinit_prelaunched_vm_vpci(const struct acrn_vm *vm);
 static void deinit_postlaunched_vm_vpci(const struct acrn_vm *vm);
 static void read_cfg(const struct acrn_vpci *vpci, union pci_bdf bdf, uint32_t offset, uint32_t bytes, uint32_t *val);
@@ -185,8 +186,6 @@ static bool pci_cfgdata_io_write(struct acrn_vm *vm, uint16_t addr, size_t bytes
  */
 void vpci_init(struct acrn_vm *vm)
 {
-	int32_t ret = -EINVAL;
-
 	struct vm_io_range pci_cfgaddr_range = {
 		.flags = IO_ATTR_RW,
 		.base = PCI_CONFIG_ADDR,
@@ -202,23 +201,14 @@ void vpci_init(struct acrn_vm *vm)
 	struct acrn_vm_config *vm_config;
 
 	vm->vpci.vm = vm;
+	vm->iommu = create_iommu_domain(vm->vm_id, hva2hpa(vm->arch_vm.nworld_eptp), 48U);
+	/* Build up vdev list for vm */
+	vpci_init_vdevs(vm);
 
 	vm_config = get_vm_config(vm->vm_id);
 	switch (vm_config->load_order) {
 	case PRE_LAUNCHED_VM:
 	case SOS_VM:
-		vm->iommu = create_iommu_domain(vm->vm_id, hva2hpa(vm->arch_vm.nworld_eptp), 48U);
-		/* Build up vdev list for vm */
-		init_vdevs(vm);
-		ret = 0;
-		break;
-
-	default:
-		/* Nothing to do for other vm types */
-		break;
-	}
-
-	if (ret == 0) {
 		/*
 		 * SOS: intercept port CF8 only.
 		 * UOS or pre-launched VM: register handler for CF8 only and I/O requests to CF9/CFA/CFB are
@@ -230,6 +220,11 @@ void vpci_init(struct acrn_vm *vm)
 		/* Intercept and handle I/O ports CFC -- CFF */
 		register_pio_emulation_handler(vm, PCI_CFGDATA_PIO_IDX, &pci_cfgdata_range,
 			pci_cfgdata_io_read, pci_cfgdata_io_write);
+		break;
+
+	default:
+		/* Nothing to do for other vm types */
+		break;
 	}
 }
 
@@ -346,20 +341,20 @@ static void vpci_init_pt_dev(struct pci_vdev *vdev)
 
 static void vpci_deinit_pt_dev(struct pci_vdev *vdev)
 {
-	deinit_vmsi(vdev);
-	deinit_vmsix(vdev);
 	remove_vdev_pt_iommu_domain(vdev);
+	deinit_vmsix(vdev);
+	deinit_vmsi(vdev);
 }
 
 static int32_t vpci_write_pt_dev_cfg(struct pci_vdev *vdev, uint32_t offset,
 		uint32_t bytes, uint32_t val)
 {
-	if (vbar_access(vdev, offset, bytes)) {
-		(void)vdev_pt_write_cfg(vdev, offset, bytes, val);
+	if (vbar_access(vdev, offset)) {
+		vdev_pt_write_cfg(vdev, offset, bytes, val);
 	} else if (msicap_access(vdev, offset)) {
-		(void)vmsi_write_cfg(vdev, offset, bytes, val);
+		vmsi_write_cfg(vdev, offset, bytes, val);
 	} else if (msixcap_access(vdev, offset)) {
-		(void)vmsix_write_cfg(vdev, offset, bytes, val);
+		vmsix_write_cfg(vdev, offset, bytes, val);
 	} else {
 		/* passthru to physical device */
 		pci_pdev_write_cfg(vdev->pdev->bdf, offset, bytes, val);
@@ -368,15 +363,15 @@ static int32_t vpci_write_pt_dev_cfg(struct pci_vdev *vdev, uint32_t offset,
 	return 0;
 }
 
-static int32_t vpci_read_pt_dev_cfg(struct pci_vdev *vdev, uint32_t offset,
+static int32_t vpci_read_pt_dev_cfg(const struct pci_vdev *vdev, uint32_t offset,
 		uint32_t bytes, uint32_t *val)
 {
-	if (vbar_access(vdev, offset, bytes)) {
-		(void)vdev_pt_read_cfg(vdev, offset, bytes, val);
+	if (vbar_access(vdev, offset)) {
+		vdev_pt_read_cfg(vdev, offset, bytes, val);
 	} else if (msicap_access(vdev, offset)) {
-		(void)vmsi_read_cfg(vdev, offset, bytes, val);
+		vmsi_read_cfg(vdev, offset, bytes, val);
 	} else if (msixcap_access(vdev, offset)) {
-		(void)vmsix_read_cfg(vdev, offset, bytes, val);
+		vmsix_read_cfg(vdev, offset, bytes, val);
 	} else {
 		/* passthru to physical device */
 		*val = pci_pdev_read_cfg(vdev->pdev->bdf, offset, bytes);
@@ -385,7 +380,7 @@ static int32_t vpci_read_pt_dev_cfg(struct pci_vdev *vdev, uint32_t offset,
 	return 0;
 }
 
-static struct pci_vdev_ops pci_pt_dev_ops = {
+static const struct pci_vdev_ops pci_pt_dev_ops = {
 	.init_vdev	= vpci_init_pt_dev,
 	.deinit_vdev	= vpci_deinit_pt_dev,
 	.write_vdev_cfg	= vpci_write_pt_dev_cfg,
@@ -419,79 +414,42 @@ static void write_cfg(const struct acrn_vpci *vpci, union pci_bdf bdf,
 }
 
 /**
- * @pre vm_config != NULL
- * @pre vm_config->pci_ptdev_num <= CONFIG_MAX_PCI_DEV_NUM
+ * @pre vpci != NULL
+ * @pre vpci.pci_vdev_cnt <= CONFIG_MAX_PCI_DEV_NUM
  */
-static struct acrn_vm_pci_ptdev_config *find_ptdev_config_by_pbdf(const struct acrn_vm_config *vm_config,
-	union pci_bdf pbdf)
+static void vpci_init_vdev(struct acrn_vpci *vpci, struct acrn_vm_pci_dev_config *dev_config)
 {
-	struct acrn_vm_pci_ptdev_config *ptdev_config, *tmp;
-	uint16_t i;
+	struct pci_vdev *vdev = &vpci->pci_vdevs[vpci->pci_vdev_cnt];
 
-	ptdev_config = NULL;
-	for (i = 0U; i < vm_config->pci_ptdev_num; i++) {
-		tmp = &vm_config->pci_ptdevs[i];
+	vpci->pci_vdev_cnt++;
+	vdev->vpci = vpci;
+	vdev->bdf.value = dev_config->vbdf.value;
+	vdev->pdev = dev_config->pdev;
+	vdev->pci_dev_config = dev_config;
 
-		if (bdf_is_equal(&tmp->pbdf, &pbdf)) {
-			ptdev_config = tmp;
-			break;
-		}
+	if (dev_config->emu_type == PCI_DEV_TYPE_PTDEV) {
+		vdev->vdev_ops = &pci_pt_dev_ops;
+		ASSERT(dev_config->pdev != NULL,
+			"PCI PTDev %x:%x.%x is not present in the platform!",
+			dev_config->pbdf.b, dev_config->pbdf.d, dev_config->pbdf.f);
+	} else {
+		vdev->vdev_ops = get_vhostbridge_ops();
 	}
 
-	return ptdev_config;
-}
-
-/**
- * @pre pdev != NULL
- * @pre vm != NULL
- * @pre vm->vpci.pci_vdev_cnt <= CONFIG_MAX_PCI_DEV_NUM
- */
-static void init_vdev_for_pdev(struct pci_pdev *pdev, const struct acrn_vm *vm)
-{
-	const struct acrn_vm_config *vm_config = get_vm_config(vm->vm_id);
-	struct acrn_vpci *vpci = &(((struct acrn_vm *)vm)->vpci);
-	struct acrn_vm_pci_ptdev_config *ptdev_config;
-
-	ptdev_config = find_ptdev_config_by_pbdf(vm_config, pdev->bdf);
-
-	if (((is_prelaunched_vm(vm) && (ptdev_config != NULL)) || is_sos_vm(vm))
-		&& (vpci->pci_vdev_cnt < CONFIG_MAX_PCI_DEV_NUM)) {
-		struct pci_vdev *vdev;
-
-		vdev = &vpci->pci_vdevs[vpci->pci_vdev_cnt];
-		vpci->pci_vdev_cnt++;
-
-		vdev->vpci = vpci;
-		vdev->pdev = pdev;
-		vdev->ptdev_config = ptdev_config;
-
-		if (ptdev_config != NULL) {
-			/* vbdf is defined in vm_config */
-			vdev->bdf.value = ptdev_config->vbdf.value;
-		} else {
-			/* vbdf is not defined in vm_config, set it to equal to pbdf */
-			vdev->bdf.value = pdev->bdf.value;
-		}
-
-		if (is_hostbridge(vdev)) {
-			vdev->vdev_ops = get_vhostbridge_ops();
-		} else {
-			vdev->vdev_ops = &pci_pt_dev_ops;
-		}
-
-		vdev->vdev_ops->init_vdev(vdev);
-	}
+	vdev->vdev_ops->init_vdev(vdev);
 }
 
 /**
  * @pre vm != NULL
  */
-static void init_vdevs(const struct acrn_vm *vm)
+static void vpci_init_vdevs(struct acrn_vm *vm)
 {
 	uint32_t idx;
+	struct acrn_vpci *vpci = &(vm->vpci);
+	const struct acrn_vm_config *vm_config = get_vm_config(vpci->vm->vm_id);
 
-	for (idx = 0U; idx < num_pci_pdev; idx++) {
-		init_vdev_for_pdev(&pci_pdev_array[idx], vm);
+	for (idx = 0U; idx < vm_config->pci_dev_num; idx++) {
+		vpci_init_vdev(vpci, &vm_config->pci_devs[idx]);
 	}
 }
 

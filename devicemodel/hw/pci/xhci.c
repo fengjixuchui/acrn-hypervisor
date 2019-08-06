@@ -1801,7 +1801,7 @@ pci_xhci_cmd_disable_slot(struct pci_xhci_vdev *xdev, uint32_t slot)
 
 	if (i <= XHCI_MAX_DEVS && XHCI_PORTREG_PTR(xdev, i)) {
 		XHCI_PORTREG_PTR(xdev, i)->portsc &= ~(XHCI_PS_CSC |
-				XHCI_PS_CCS | XHCI_PS_PED | XHCI_PS_PP);
+				XHCI_PS_CCS | XHCI_PS_PED);
 
 		udev = dev->dev_instance;
 
@@ -2923,7 +2923,7 @@ retry:
 					trb->dwTrb2 & 0x1FFFF, (void *)addr,
 					ccs);
 
-			if (trb->dwTrb3 & XHCI_TRB_3_CHAIN_BIT)
+			if (xfer_block && (trb->dwTrb3 & XHCI_TRB_3_CHAIN_BIT))
 				xfer_block->chained = 1;
 			break;
 
@@ -3718,6 +3718,8 @@ pci_xhci_dev_intr(struct usb_hci *hci, int epctx)
 
 	/* HW endpoint contexts are 0-15; convert to epid based on dir */
 	epid = (epid * 2) + (dir_in ? 1 : 0);
+	if (epid >= XHCI_MAX_ENDPOINTS)
+		return 0;
 
 	dev = hci->dev;
 	xdev = dev->xdev;

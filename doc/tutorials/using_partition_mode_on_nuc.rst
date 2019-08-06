@@ -34,7 +34,7 @@ Prerequisites
   filesystem. Set up each VM by following the `Install Clear Linux
   OS on bare metal with live server
   <https://clearlinux.org/documentation/clear-linux/get-started/bare-metal-install-server>`_
-  and install Clear Linux OS first on a SATA disk and then again
+  and install Clear Linux OS (version: 29970) first on a SATA disk and then again
   on a storage device with a USB interface. The two pre-launched
   VMs will mount the root file systems via the SATA controller and
   the USB controller respectively.
@@ -132,7 +132,7 @@ Update ACRN hypervisor Image
    .. note::
 
       Double check PCI devices BDF defined in the
-      ``hypervisor/arch/x86/configs/nuc7i7bnh/pci_devices.h``
+      ``hypervisor/arch/x86/configs/nuc7i7dnb/pci_devices.h``
       with the information reported by the ``lspci -vv`` command.
 
 #. Clone the ACRN source code and configure the build options
@@ -140,18 +140,20 @@ Update ACRN hypervisor Image
    Please refer :ref:`getting-started-building` to setup ACRN build environment
    on your development workstation.
 
-   Clone the ACRN source code:
+   Clone the ACRN source code and checkout to the tag v1.1:
 
    .. code-block:: none
 
       $ git clone https://github.com/projectacrn/acrn-hypervisor.git
-      $ cd acrn-hypervisor/hypervisor
+      $ cd acrn-hypervisor
+      $ git checkout v1.1
+      $ cd hypervisor
 
    Configure the build options:
 
    .. code-block:: none
 
-      $ make defconfig BOARD=nuc7i7bnh
+      $ make defconfig BOARD=nuc7i7dnb
       $ make menuconfig
 
    Updates the following configure item:
@@ -176,7 +178,7 @@ Update ACRN hypervisor Image
    The above command output should contain the ``GRUB`` keyword.
 
 #. Check or update BDF information of PCI devices of each pre-launched VM;
-   Check it in the ``hypervisor/arch/x86/configs/nuc7i7bnh/pci_devices.h``.
+   Check it in the ``hypervisor/arch/x86/configs/nuc7i7dnb/pci_devices.h``.
 
 #. Build the ACRN hypervisor and copy the artifact ``acrn.32.out`` to the
    ``/boot`` directory:

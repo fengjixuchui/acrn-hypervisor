@@ -36,7 +36,7 @@ if "RELEASE" in os.environ:
 
 sys.path.insert(0, os.path.join(os.path.abspath('.'), 'extensions'))
 extensions = ['breathe', 'sphinx.ext.graphviz', 'sphinx.ext.extlinks',
-              'kerneldoc', 'eager_only']
+              'kerneldoc', 'eager_only', 'html_redirects']
 
 # extlinks provides a macro template
 
@@ -132,7 +132,7 @@ language = None
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = ['_build' ]
+exclude_patterns = ['_build', 'misc/README.rst' ]
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
@@ -301,3 +301,19 @@ breathe_projects = {
 }
 breathe_default_project = "Project ACRN"
 breathe_default_members = ('members', 'undoc-members', 'content-only')
+
+
+# Custom added feature to allow redirecting old URLs (caused by
+# reorganizing doc directories)
+#
+# list of tuples (old_url, new_url) for pages to redirect
+#
+# URLs must be relative to document root (with NO leading slash),
+# and without the html extension)
+html_redirect_pages = [
+   ('developer-guides/index', 'contribute'),
+   ('getting-started/index', 'try'),
+   ('user-guides/index', 'develop'),
+   ('hardware', 'reference/hardware'),
+   ('release_notes', 'release_notes/index')
+   ]

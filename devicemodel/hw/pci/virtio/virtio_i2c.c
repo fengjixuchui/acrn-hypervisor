@@ -443,7 +443,9 @@ native_adapter_create(int bus, uint16_t slave_addr[], int n_slave)
 		return NULL;
 	}
 
-	sprintf(native_path, "/dev/i2c-%d", bus);
+	snprintf(native_path, sizeof(native_path), "/dev/i2c-%d", bus);
+	native_path[sizeof(native_path) - 1] = '\0';
+
 	fd = open(native_path, O_RDWR);
 	if (fd < 0) {
 		WPRINTF("virtio_i2c: failed to open %s\n", native_path);
@@ -645,7 +647,7 @@ virtio_i2c_parse(struct virtio_i2c *vi2c, char *optstr)
 			}
 			cp = t;
 		}
-		if (n_adapter > MAX_NATIVE_I2C_ADAPTER) {
+		if (n_adapter >= MAX_NATIVE_I2C_ADAPTER) {
 			WPRINTF("too many adapter, only support %d \n", MAX_NATIVE_I2C_ADAPTER);
 			return -1;
 		}

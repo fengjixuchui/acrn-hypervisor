@@ -43,7 +43,7 @@ doxy:
 	$(Q)find doxygen/xml/* | xargs sed -i 's/simplesect kind="pre"/simplesect kind="preconditions"/'
 
 content:
-	$(Q)scripts/extract_content.py . tools
+	$(Q)scripts/extract_content.py . misc
 
 kconfig:
 	$(Q)srctree=../hypervisor \
@@ -64,7 +64,7 @@ singlehtml: doxy content kconfig
 
 clean:
 	rm -fr $(BUILDDIR) doxygen
-	rm -fr tools
+	rm -fr misc
 	rm -fr reference/kconfig/*.rst
 
 # Copy material over to the GitHub pages staging repo

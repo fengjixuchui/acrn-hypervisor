@@ -26,6 +26,7 @@
 #include <cat.h>
 #include <vboot.h>
 #include <sgx.h>
+#include <uart16550.h>
 
 #define CPU_UP_TIMEOUT		100U /* millisecond */
 #define CPU_DOWN_TIMEOUT	100U /* millisecond */
@@ -106,10 +107,21 @@ void init_pcpu_pre(bool is_bsp)
 		/* Clear BSS */
 		(void)memset(&ld_bss_start, 0U, (size_t)(&ld_bss_end - &ld_bss_start));
 
+		(void)parse_hv_cmdline();
+		/*
+		 * Enable UART as early as possible.
+		 * Then we could use printf for debugging on early boot stage.
+		 */
+		uart16550_init(true);
+
 		/* Get CPU capabilities thru CPUID, including the physical address bit
 		 * limit which is required for initializing paging.
 		 */
 		init_pcpu_capabilities();
+
+		if (detect_hardware_support() != 0) {
+			panic("hardware not support!");
+		}
 
 		init_pcpu_model_name();
 
@@ -119,9 +131,11 @@ void init_pcpu_pre(bool is_bsp)
 		init_e820();
 		init_paging();
 
-		if (!pcpu_has_cap(X86_FEATURE_X2APIC)) {
-			panic("x2APIC is not present!");
-		}
+		/*
+		 * Need update uart_base_address here for vaddr2paddr mapping may changed
+		 * WARNNING: DO NOT CALL PRINTF BETWEEN ENABLE PAGING IN init_paging AND HERE!
+		 */
+		uart16550_init(false);
 
 		early_init_lapic();
 
@@ -189,10 +203,6 @@ void init_pcpu_post(uint16_t pcpu_id)
 		pr_acrnlog("Detect processor: %s", (get_pcpu_info())->model_name);
 
 		pr_dbg("Core %hu is up", BOOT_CPU_ID);
-
-		if (detect_hardware_support() != 0) {
-			panic("hardware not support!");
-		}
 
 		if (!sanitize_vm_config()) {
 			panic("VM Configuration Error!");
@@ -413,32 +423,33 @@ static void print_hv_banner(void)
 	printf(boot_msg);
 }
 
+static
+inline void asm_monitor(volatile const uint64_t *addr, uint64_t ecx, uint64_t edx)
+{
+	asm volatile("monitor\n" : : "a" (addr), "c" (ecx), "d" (edx));
+}
+
+static
+inline void asm_mwait(uint64_t eax, uint64_t ecx)
+{
+	asm volatile("mwait\n" : : "a" (eax), "c" (ecx));
+}
+
 /* wait until *sync == wake_sync */
-void wait_sync_change(uint64_t *sync, uint64_t wake_sync)
+void wait_sync_change(volatile const uint64_t *sync, uint64_t wake_sync)
 {
 	if (has_monitor_cap()) {
 		/* Wait for the event to be set using monitor/mwait */
-		asm volatile ("1: cmpq      %%rbx,(%%rax)\n"
-			      "   je        2f\n"
-			      "   monitor\n"
-			      "   mwait\n"
-			      "   jmp       1b\n"
-			      "2:\n"
-			      :
-			      : "a" (sync), "d"(0), "c"(0),
-			      "b"(wake_sync)
-			      : "cc");
+		while ((*sync) != wake_sync) {
+			asm_monitor(sync, 0UL, 0UL);
+			if ((*sync) != wake_sync) {
+				asm_mwait(0UL, 0UL);
+			}
+		}
 	} else {
-		/* Wait for the event to be set using pause */
-		asm volatile ("1: cmpq      %%rbx,(%%rax)\n"
-			      "   je        2f\n"
-			      "   pause\n"
-			      "   jmp       1b\n"
-			      "2:\n"
-			      :
-			      : "a" (sync), "d"(0), "c"(0),
-			      "b"(wake_sync)
-			      : "cc");
+		while ((*sync) != wake_sync) {
+			asm_pause();
+		}
 	}
 }
 

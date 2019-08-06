@@ -130,6 +130,8 @@
 #define MSIX_CAPLEN           12U
 #define MSIX_TABLE_ENTRY_SIZE 16U
 
+#define HOST_BRIDGE_BDF		0U
+
 union pci_bdf {
 	uint16_t value;
 	struct {
@@ -215,10 +217,6 @@ struct pci_pdev {
 
 	struct pci_msix_cap msix;
 };
-
-extern uint32_t num_pci_pdev;
-extern struct pci_pdev pci_pdev_array[CONFIG_MAX_PCI_DEV_NUM];
-
 
 static inline uint32_t pci_bar_offset(uint32_t idx)
 {

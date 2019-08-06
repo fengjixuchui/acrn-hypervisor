@@ -45,7 +45,7 @@ ARCH_LDFLAGS :=
 .PHONY: default
 default: all
 
-include $(BASEDIR)/../scripts/deps.mk
+include $(BASEDIR)/../misc/acrn-config/library/deps.mk
 
 include scripts/kconfig/kconfig.mk
 
@@ -247,6 +247,7 @@ VP_BASE_C_SRCS += boot/guest/vboot_info.c
 VP_BASE_C_SRCS += common/hv_main.c
 VP_BASE_C_SRCS += common/vm_load.c
 VP_BASE_C_SRCS += arch/x86/configs/vmptable.c
+VP_BASE_C_SRCS += arch/x86/configs/pci_dev.c
 VP_BASE_C_SRCS += arch/x86/configs/$(CONFIG_BOARD)/ve820.c
 
 # virtual platform device model
@@ -372,6 +373,11 @@ else
 	install -D $(HV_OBJDIR)/$(HV_FILE).out $(DESTDIR)/usr/lib/acrn/$(HV_FILE).sbl.out
 	install -D $(HV_OBJDIR)/$(HV_FILE).map $(DESTDIR)/usr/lib/acrn/$(HV_FILE).sbl.map
 endif
+endif
+
+ifeq ($(FIRMWARE),uefi)
+install: $(HV_OBJDIR)/$(HV_FILE).32.out
+	install -D $(HV_OBJDIR)/$(HV_FILE).32.out $(DESTDIR)/usr/lib/acrn/$(HV_FILE).$(BOARD).32.out
 endif
 
 .PHONY: pre_build

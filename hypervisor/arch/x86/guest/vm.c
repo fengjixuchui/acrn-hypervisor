@@ -27,6 +27,7 @@
 #include <board.h>
 #include <sgx.h>
 #include <sbuf.h>
+#include <pci_dev.h>
 
 vm_sw_loader_t vm_sw_loader;
 
@@ -447,8 +448,9 @@ int32_t create_vm(uint16_t vm_id, struct acrn_vm_config *vm_config, struct acrn_
 		status = init_vm_boot_info(vm);
 		if (status != 0) {
 			need_cleanup = true;
+		} else {
+			initialize_sos_pci_dev_config(vm_config);
 		}
-
 	} else {
 		/* For PRE_LAUNCHED_VM and POST_LAUNCHED_VM */
 		if ((vm_config->guest_flags & GUEST_FLAG_SECURE_WORLD_ENABLED) != 0U) {
@@ -587,9 +589,7 @@ int32_t shutdown_vm(struct acrn_vm *vm)
 		ptdev_release_all_entries(vm);
 
 		/* Free iommu */
-		if (vm->iommu != NULL) {
-			destroy_iommu_domain(vm->iommu);
-		}
+		destroy_iommu_domain(vm->iommu);
 
 		/* Free EPT allocated resources assigned to VM */
 		destroy_ept(vm);
@@ -608,13 +608,13 @@ int32_t shutdown_vm(struct acrn_vm *vm)
  */
 void start_vm(struct acrn_vm *vm)
 {
-	struct acrn_vcpu *vcpu = NULL;
+	struct acrn_vcpu *bsp = NULL;
 
 	vm->state = VM_STARTED;
 
 	/* Only start BSP (vid = 0) and let BSP start other APs */
-	vcpu = vcpu_from_vid(vm, 0U);
-	schedule_vcpu(vcpu);
+	bsp = vcpu_from_vid(vm, BOOT_CPU_ID);
+	schedule_vcpu(bsp);
 }
 
 /**
@@ -702,7 +702,7 @@ void pause_vm(struct acrn_vm *vm)
  */
 void resume_vm_from_s3(struct acrn_vm *vm, uint32_t wakeup_vec)
 {
-	struct acrn_vcpu *bsp = vcpu_from_vid(vm, 0U);
+	struct acrn_vcpu *bsp = vcpu_from_vid(vm, BOOT_CPU_ID);
 
 	vm->state = VM_STARTED;
 
@@ -711,10 +711,11 @@ void resume_vm_from_s3(struct acrn_vm *vm, uint32_t wakeup_vec)
 	/* When SOS resume from S3, it will return to real mode
 	 * with entry set to wakeup_vec.
 	 */
-	set_ap_entry(bsp, wakeup_vec);
+	set_vcpu_startup_entry(bsp, wakeup_vec);
 
 	init_vmcs(bsp);
 	schedule_vcpu(bsp);
+	switch_to_idle(default_idle);
 }
 
 /**

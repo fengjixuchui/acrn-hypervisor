@@ -181,6 +181,10 @@ usb_dev_comp_cb(struct libusb_transfer *trn)
 
 	/* async request */
 	r = trn->user_data;
+	if (!r) {
+		UPRINTF(LFTL, "error: user context data not found on USB transfer\r\n");
+		goto free_transfer;
+	}
 	info = &r->udev->info;
 
 	/* async transfer */
@@ -311,13 +315,14 @@ out:
 cancel_out:
 	/* unlock and release memory */
 	g_ctx.unlock_ep_cb(xfer->dev, &xfer->epid);
-	libusb_free_transfer(trn);
 
 	if (r && r->buffer)
 		free(r->buffer);
 
 	xfer->requests[r->blk_start] = NULL;
 	free(r);
+free_transfer:
+	libusb_free_transfer(trn);
 }
 
 static struct usb_dev_req *
@@ -897,6 +902,36 @@ done:
 	return xfer->status;
 }
 
+static void
+clear_uas_desc(struct usb_dev *udev, uint8_t *data, uint32_t len)
+{
+	struct usb_devpath *path;
+	int32_t i;
+
+	/* only process configuration descriptor */
+	if (len < 2 || data[1] != 0x2)
+		return;
+
+	i = 0;
+	path = &udev->info.path;
+	while (i < len) {
+		/* When UAS protocol is found in interface descriptor, set it
+		 * to invalid value.
+		 *
+		 * According to USB3 spec 9.6.5, Standard Interface Descriptor,
+		 * data[i+0] => bLength
+		 * data[i+1] => bDescriptorType
+		 * data[i+7] => bInterfaceProtocol
+		 */
+		if (data[i] == 9 && data[i+1] == 0x4 && data[i+7] == 0x62) {
+			UPRINTF(LFTL, "%d-%s: clear uas protocol\r\n",
+					path->bus, usb_dev_path(path));
+			data[i+7] = 0;
+		}
+		i = i + data[i];
+	}
+}
+
 int
 usb_dev_request(void *pdata, struct usb_data_xfer *xfer)
 {
@@ -909,9 +944,9 @@ usb_dev_request(void *pdata, struct usb_data_xfer *xfer)
 	struct usb_data_xfer_block *blk;
 	uint8_t *data;
 	int rc;
+	bool need_chk_uas = false;
 
 	udev = pdata;
-
 	xfer->status = USB_ERR_NORMAL_COMPLETION;
 	if (!udev->info.priv_data || !xfer->ureq) {
 		UPRINTF(LWRN, "invalid request\r\n");
@@ -928,10 +963,10 @@ usb_dev_request(void *pdata, struct usb_data_xfer *xfer)
 	blk = usb_dev_prepare_ctrl_xfer(xfer);
 	data = blk ? blk->buf : NULL;
 
-	UPRINTF(LDBG,
-		"urb: type 0x%x req 0x%x val 0x%x idx %d len %d data %d\n",
-		 request_type, request, value, index, len,
-		 blk ? blk->blen : 0);
+	UPRINTF(LDBG, "%d-%s: urb: type 0x%x req 0x%x val 0x%x idx %d len %d "
+			"data %d\r\n", udev->info.path.bus,
+			usb_dev_path(&udev->info.path), request_type, request,
+			value, index, len, blk ? blk->blen : 0);
 
 	/*
 	 * according to usb spec, control transfer may have no
@@ -956,6 +991,10 @@ usb_dev_request(void *pdata, struct usb_data_xfer *xfer)
 		UPRINTF(LDBG, "UR_SET_INTERFACE\n");
 		usb_dev_set_if(udev, index, value, xfer);
 		goto out;
+	case UREQ(UR_GET_DESCRIPTOR, UT_READ):
+		if (value == 0x0200)
+			need_chk_uas = true;
+		break;
 	case UREQ(UR_CLEAR_FEATURE, UT_WRITE_ENDPOINT):
 		if (value) {
 			/* according to usb spec (ch9), this is impossible */
@@ -981,6 +1020,13 @@ usb_dev_request(void *pdata, struct usb_data_xfer *xfer)
 	rc = libusb_control_transfer(udev->handle, request_type, request,
 			value, index, data, len, 300);
 
+	/* TODO: Currently, the USB Attached SCSI (UAS) protocol is not
+	 * supported and the following code is used as a workaround now.
+	 * UAS will be implemented in future.
+	 */
+	if (need_chk_uas)
+		clear_uas_desc(udev, data, rc);
+
 	if (rc >= 0 && blk) {
 		blk->blen = len - rc;
 		blk->bdone += rc;
@@ -991,8 +1037,9 @@ usb_dev_request(void *pdata, struct usb_data_xfer *xfer)
 	else
 		xfer->status = usb_dev_err_convert(rc);
 
-	UPRINTF(LDBG, "usb rc %d, blk %p, blen %u bdon %u\n", rc, blk,
-			blk ? blk->blen : 0, blk ? blk->bdone : 0);
+	UPRINTF(LDBG, "%d-%s: usb rc %d, blk %p, blen %u bdon %u\n",
+			udev->info.path.bus, usb_dev_path(&udev->info.path),
+			rc, blk, blk ? blk->blen : 0, blk ? blk->bdone : 0);
 out:
 	return xfer->status;
 }

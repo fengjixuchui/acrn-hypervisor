@@ -34,10 +34,11 @@
 #include <pci.h>
 #include <uart16550.h>
 #include <logmsg.h>
+#include <pci_dev.h>
 
 static spinlock_t pci_device_lock;
-uint32_t num_pci_pdev;
-struct pci_pdev pci_pdev_array[CONFIG_MAX_PCI_DEV_NUM];
+static uint32_t num_pci_pdev;
+static struct pci_pdev pci_pdev_array[CONFIG_MAX_PCI_DEV_NUM];
 
 static void init_pdev(uint16_t pbdf);
 
@@ -177,7 +178,7 @@ void init_pci_pdev_list(void)
 					secondary_bus = (uint8_t)pci_pdev_read_cfg(pbdf, PCIR_SECBUS_1, 1U);
 					if (bus_to_scan[secondary_bus] != BUS_SCAN_SKIP) {
 						pr_err("%s, bus %d may be downstream of different PCI bridges",
-							secondary_bus);
+							__func__, secondary_bus);
 					} else {
 						bus_to_scan[secondary_bus] = BUS_SCAN_PENDING;
 					}
@@ -414,6 +415,8 @@ static void fill_pdev(uint16_t pbdf, struct pci_pdev *pdev)
 	if ((pci_pdev_read_cfg(pdev->bdf, PCIR_STATUS, 2U) & PCIM_STATUS_CAPPRESENT) != 0U) {
 		pci_read_cap(pdev, hdr_type);
 	}
+
+	fill_pci_dev_config(pdev);
 }
 
 static void init_pdev(uint16_t pbdf)

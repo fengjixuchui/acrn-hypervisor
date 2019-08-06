@@ -30,6 +30,7 @@
 #include <vm.h>
 #include <irq.h>
 #include <assign.h>
+#include <spinlock.h>
 #include <logmsg.h>
 
 #define ACRN_DBG_PIC	6U
@@ -201,8 +202,8 @@ static void vpic_notify_intr(struct acrn_vpic *vpic)
 		 */
 		i8259->intr_raised = true;
 		if (vpic->vm->wire_mode == VPIC_WIRE_INTR) {
-			struct acrn_vcpu *vcpu = vcpu_from_vid(vpic->vm, 0U);
-			vcpu_inject_extint(vcpu);
+			struct acrn_vcpu *bsp = vcpu_from_vid(vpic->vm, BOOT_CPU_ID);
+			vcpu_inject_extint(bsp);
 		} else {
 			/*
 			 * The input parameters here guarantee the return value of vlapic_set_local_intr is 0, means
@@ -464,13 +465,14 @@ void vpic_set_irqline(struct acrn_vpic *vpic, uint32_t irqline, uint32_t operati
 {
 	struct i8259_reg_state *i8259;
 	uint32_t pin;
+	uint64_t rflags;
 
 	if (irqline < NR_VPIC_PINS_TOTAL) {
 		i8259 = &vpic->i8259[irqline >> 3U];
 		pin = irqline;
 
 		if (i8259->ready) {
-			spinlock_obtain(&(vpic->lock));
+			spinlock_irqsave_obtain(&(vpic->lock), &rflags);
 			switch (operation) {
 			case GSI_SET_HIGH:
 				vpic_set_pinstate(vpic, pin, 1U);
@@ -493,7 +495,7 @@ void vpic_set_irqline(struct acrn_vpic *vpic, uint32_t irqline, uint32_t operati
 				break;
 			}
 			vpic_notify_intr(vpic);
-			spinlock_release(&(vpic->lock));
+			spinlock_irqrestore_release(&(vpic->lock), rflags);
 		}
 	}
 }

@@ -26,6 +26,7 @@ To set up the Linux root filesystems for each VM, follow the Clear Linux OS
 to install Clear Linux OS on a **SATA disk** and a **USB flash disk** prior the setup,
 as the two privileged VMs will mount the root filesystems via the SATA controller
 and the USB controller respectively.
+This tutorial is verified on a tagged ACRN v0.6.
 
 Build kernel and modules for partition mode UOS
 ***********************************************
@@ -148,7 +149,9 @@ Enable partition mode in ACRN hypervisor
    .. code-block:: none
 
      $ git clone https://github.com/projectacrn/acrn-hypervisor.git
-     $ cd acrn-hypervisor/hypervisor
+     $ cd acrn-hypervisor
+     $ git checkout v0.6
+     $ cd hypervisor
      $ make menuconfig
 
    Set the ``Hypervisor mode`` option to ``Partition mode``, and depending
@@ -226,7 +229,7 @@ Enable partition mode in ACRN hypervisor
 
    PCI devices that are available to the privileged VMs
    are hardcoded in the source file ``hypervisor/arch/x86/configs/up2/pt_dev.c``.
-   You need to review and modify the ``vm0_pci_ptdevs`` and ``vm1_pci_ptdevs``
+   You need to review and modify the ``vm0_pci_devs`` and ``vm1_pci_devs``
    structures in the source code to match the PCI BDF addresses of the SATA
    controller and the USB controller noted in step 1:
 
@@ -235,7 +238,7 @@ Enable partition mode in ACRN hypervisor
      :caption: hypervisor/arch/x86/configs/up2/pt_dev.c
 
      ...
-     struct acrn_vm_pci_ptdev_config vm0_pci_ptdevs[2] = {
+     struct acrn_vm_pci_dev_config vm0_pci_devs[2] = {
 	{
 		.vbdf.bits = {.b = 0x00U, .d = 0x00U, .f = 0x00U},
 		.pbdf.bits = {.b = 0x00U, .d = 0x00U, .f = 0x00U},
@@ -247,7 +250,7 @@ Enable partition mode in ACRN hypervisor
      };
 
      ...
-     struct acrn_vm_pci_ptdev_config vm1_pci_ptdevs[3] = {
+     struct acrn_vm_pci_dev_config vm1_pci_devs[3] = {
 	{
 		.vbdf.bits = {.b = 0x00U, .d = 0x00U, .f = 0x00U},
 		.pbdf.bits = {.b = 0x00U, .d = 0x00U, .f = 0x00U},

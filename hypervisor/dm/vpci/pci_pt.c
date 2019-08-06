@@ -129,16 +129,14 @@ static uint64_t get_pbar_base(const struct pci_pdev *pdev, uint32_t idx)
 /**
  * @pre vdev != NULL
  */
-int32_t vdev_pt_read_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t *val)
+void vdev_pt_read_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t *val)
 {
-	int32_t ret = -ENODEV;
-
-	if (is_bar_offset(vdev->nr_bars, offset)) {
+	/* bar access must be 4 bytes and offset must also be 4 bytes aligned */
+	if ((bytes == 4U) && ((offset & 0x3U) == 0U)) {
 		*val = pci_vdev_read_cfg(vdev, offset, bytes);
-		ret = 0;
+	} else {
+		*val = ~0U;
 	}
-
-	return ret;
 }
 
 /**
@@ -440,17 +438,12 @@ static void vdev_pt_write_vbar(struct pci_vdev *vdev, uint32_t offset, uint32_t 
  * @pre vdev != NULL
  * bar write access must be 4 bytes and offset must also be 4 bytes aligned, it will be dropped otherwise
  */
-int32_t vdev_pt_write_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val)
+void vdev_pt_write_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val)
 {
-	int32_t ret = -ENODEV;
-
-	/* bar write access must be 4 bytes and offset must also be 4 bytes aligned*/
-	if (is_bar_offset(vdev->nr_bars, offset) && (bytes == 4U) && ((offset & 0x3U) == 0U)) {
+	/* bar write access must be 4 bytes and offset must also be 4 bytes aligned */
+	if ((bytes == 4U) && ((offset & 0x3U) == 0U)) {
 		vdev_pt_write_vbar(vdev, offset, val);
-		ret = 0;
 	}
-
-	return ret;
 }
 
 /**
@@ -505,7 +498,7 @@ void init_vdev_pt(struct pci_vdev *vdev)
 				vbar_base = get_pbar_base(vdev->pdev, idx);
 			} else if (idx > 0U) {
 				/* For pre-launched VMs: vbar base is predefined in vm_config */
-				vbar_base = vdev->ptdev_config->vbar_base[idx - 1U];
+				vbar_base = vdev->pci_dev_config->vbar_base[idx - 1U];
 			} else {
 				vbar_base = 0UL;
 			}
@@ -529,7 +522,7 @@ void init_vdev_pt(struct pci_vdev *vdev)
 					vbar_base = get_pbar_base(vdev->pdev, idx);
 				} else {
 					/* For pre-launched VMs: vbar base is predefined in vm_config */
-					vbar_base = vdev->ptdev_config->vbar_base[idx];
+					vbar_base = vdev->pci_dev_config->vbar_base[idx];
 				}
 				vdev_pt_write_vbar(vdev, pci_bar_offset(idx), (uint32_t)vbar_base);
 				break;
