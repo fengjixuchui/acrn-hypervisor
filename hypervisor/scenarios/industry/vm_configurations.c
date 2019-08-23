@@ -6,6 +6,7 @@
 
 #include <vm_config.h>
 #include <vuart.h>
+#include <pci_dev.h>
 
 struct acrn_vm_config vm_configs[CONFIG_MAX_VM_NUM] = {
 	{
@@ -28,13 +29,18 @@ struct acrn_vm_config vm_configs[CONFIG_MAX_VM_NUM] = {
 		},
 		.vuart[0] = {
 			.type = VUART_LEGACY_PIO,
-			.addr.port_base = CONFIG_COM_BASE,
-			.irq = CONFIG_COM_IRQ,
+			.addr.port_base = SOS_COM1_BASE,
+			.irq = SOS_COM1_IRQ,
 		},
 		.vuart[1] = {
 			.type = VUART_LEGACY_PIO,
-			.addr.port_base = INVALID_COM_BASE,
-		}
+			.addr.port_base = SOS_COM2_BASE,
+			.irq = SOS_COM2_IRQ,
+			.t_vuart.vm_id = 2U,
+			.t_vuart.vuart_id = 1U,
+		},
+		.pci_dev_num = SOS_EMULATED_PCI_DEV_NUM,
+		.pci_devs = sos_pci_devs,
 	},
 	{
 		.load_order = POST_LAUNCHED_VM,
@@ -43,7 +49,8 @@ struct acrn_vm_config vm_configs[CONFIG_MAX_VM_NUM] = {
 			/* d2795438-25d6-11e8-864e-cb7a18b34643 */
 		.vuart[0] = {
 			.type = VUART_LEGACY_PIO,
-			.addr.port_base = INVALID_COM_BASE,
+			.addr.port_base = COM1_BASE,
+			.irq = COM1_IRQ,
 		},
 		.vuart[1] = {
 			.type = VUART_LEGACY_PIO,
@@ -61,13 +68,16 @@ struct acrn_vm_config vm_configs[CONFIG_MAX_VM_NUM] = {
 		.guest_flags = GUEST_FLAG_HIGHEST_SEVERITY,
 		.vuart[0] = {
 			.type = VUART_LEGACY_PIO,
-			.addr.port_base = INVALID_COM_BASE,
+			.addr.port_base = COM1_BASE,
+			.irq = COM1_IRQ,
 		},
 		.vuart[1] = {
 			.type = VUART_LEGACY_PIO,
-			.addr.port_base = INVALID_COM_BASE,
-		}
-
+			.addr.port_base = COM2_BASE,
+			.irq = COM2_IRQ,
+			.t_vuart.vm_id = 0U,
+			.t_vuart.vuart_id = 1U,
+		},
 	},
 	{
 		.load_order = POST_LAUNCHED_VM,
@@ -76,7 +86,8 @@ struct acrn_vm_config vm_configs[CONFIG_MAX_VM_NUM] = {
 			/* 38158821-5208-4005-b72a-8a609e4190d0 */
 		.vuart[0] = {
 			.type = VUART_LEGACY_PIO,
-			.addr.port_base = INVALID_COM_BASE,
+			.addr.port_base = COM1_BASE,
+			.irq = COM1_IRQ,
 		},
 		.vuart[1] = {
 			.type = VUART_LEGACY_PIO,

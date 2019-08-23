@@ -41,7 +41,6 @@ struct io_request {
 struct vm_io_range {
 	uint16_t base;		/**< IO port base */
 	uint16_t len;		/**< IO port range */
-	uint32_t flags;		/**< IO port attributes */
 };
 
 struct vm_io_handler_desc;
@@ -49,10 +48,10 @@ struct acrn_vm;
 struct acrn_vcpu;
 
 typedef
-bool (*io_read_fn_t)(struct acrn_vm *vm, struct acrn_vcpu *vcpu, uint16_t port, size_t size);
+bool (*io_read_fn_t)(struct acrn_vcpu *vcpu, uint16_t port, size_t size);
 
 typedef
-bool (*io_write_fn_t)(struct acrn_vm *vm, uint16_t port, size_t size, uint32_t val);
+bool (*io_write_fn_t)(struct acrn_vcpu *vcpu, uint16_t port, size_t size, uint32_t val);
 
 /**
  * @brief Describes a single IO handler description entry.
@@ -104,11 +103,6 @@ struct vm_io_handler_desc {
 	 */
 	io_write_fn_t io_write;
 };
-
-
-#define IO_ATTR_R               0U
-#define IO_ATTR_RW              1U
-#define IO_ATTR_NO_ACCESS       2U
 
 /* Typedef for MMIO handler and range check routine */
 struct mmio_request;

@@ -378,6 +378,11 @@ static inline bool is_vcpu_bsp(const struct acrn_vcpu *vcpu)
 	return (vcpu->vcpu_id == BOOT_CPU_ID);
 }
 
+static inline enum vm_cpu_mode get_vcpu_mode(const struct acrn_vcpu *vcpu)
+{
+	return vcpu->arch.cpu_mode;
+}
+
 /* do not update Guest RIP for next VM Enter */
 static inline void vcpu_retain_rip(struct acrn_vcpu *vcpu)
 {
@@ -454,7 +459,7 @@ void vcpu_set_rip(struct acrn_vcpu *vcpu, uint64_t val);
  *
  * @return the value of RSP.
  */
-uint64_t vcpu_get_rsp(struct acrn_vcpu *vcpu);
+uint64_t vcpu_get_rsp(const struct acrn_vcpu *vcpu);
 
 /**
  * @brief set vcpu RSP value
@@ -546,7 +551,7 @@ void vcpu_set_guest_msr(struct acrn_vcpu *vcpu, uint32_t msr, uint64_t val);
  *
  * @return None
  */
-void vcpu_set_vmcs_eoi_exit(struct acrn_vcpu *vcpu);
+void vcpu_set_vmcs_eoi_exit(const struct acrn_vcpu *vcpu);
 
 /**
  * @brief reset all eoi_exit_bitmaps
@@ -602,6 +607,18 @@ void set_vcpu_regs(struct acrn_vcpu *vcpu, struct acrn_vcpu_regs *vcpu_regs);
  * @return None
  */
 void reset_vcpu_regs(struct acrn_vcpu *vcpu);
+
+/**
+ * @brief Initialize the protect mode vcpu registers
+ *
+ * Initialize vCPU's all registers in run_context to initial protece mode values.
+ *
+ * @param[inout] vcpu pointer to vcpu data structure
+ * @param[in] vgdt_base_gpa guest physical address of gdt for guest
+ *
+ * @return None
+ */
+void init_vcpu_protect_mode_regs(struct acrn_vcpu *vcpu, uint64_t vgdt_base_gpa);
 
 /**
  * @brief set the vCPU startup entry

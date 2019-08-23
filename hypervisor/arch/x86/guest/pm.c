@@ -39,7 +39,7 @@ int32_t validate_pstate(const struct acrn_vm *vm, uint64_t perf_ctl)
 			max_px_ctl_val = ((px_data[0].control & 0xff00UL) >> 8U);
 
 			/* get min px control value, should be for p(px_cnt-1), i.e. LFM. */
-			min_px_ctl_val = ((px_data[px_cnt - 1].control & 0xff00UL) >> 8U);
+			min_px_ctl_val = ((px_data[px_cnt - 1U].control & 0xff00UL) >> 8U);
 
 			px_target_val = ((perf_ctl & 0xff00UL) >> 8U);
 			if ((px_target_val <= max_px_ctl_val) && (px_target_val >= min_px_ctl_val)) {
@@ -140,7 +140,7 @@ static inline uint8_t get_slp_typx(uint32_t pm1_cnt)
 	return (uint8_t)((pm1_cnt & 0x1fffU) >> BIT_SLP_TYPx);
 }
 
-static bool pm1ab_io_read(__unused struct acrn_vm *vm, struct acrn_vcpu *vcpu, uint16_t addr, size_t width)
+static bool pm1ab_io_read(struct acrn_vcpu *vcpu, uint16_t addr, size_t width)
 {
 	struct pio_request *pio_req = &vcpu->req.reqs.pio;
 
@@ -165,11 +165,16 @@ static inline void enter_s3(struct acrn_vm *vm, uint32_t pm1a_cnt_val, uint32_t 
 	resume_vm_from_s3(vm, guest_wakeup_vec32);	/* jump back to vm */
 }
 
-static bool pm1ab_io_write(struct acrn_vm *vm, uint16_t addr, size_t width, uint32_t v)
+/**
+ * @pre vcpu != NULL
+ * @pre vcpu->vm != NULL
+ */
+static bool pm1ab_io_write(struct acrn_vcpu *vcpu, uint16_t addr, size_t width, uint32_t v)
 {
 	static uint32_t pm1a_cnt_ready = 0U;
 	uint32_t pm1a_cnt_val;
 	bool to_write = true;
+	struct acrn_vm *vm = vcpu->vm;
 
 	if (width == 2U) {
 		uint8_t val = get_slp_typx(v);
@@ -217,7 +222,6 @@ static void register_gas_io_handler(struct acrn_vm *vm, uint32_t pio_idx, const 
 
 	if ((gas->address != 0UL) && (gas->space_id == SPACE_SYSTEM_IO)
 			&& (gas->access_size != 0U) && (gas->access_size <= 4U)) {
-		gas_io.flags = IO_ATTR_RW;
 		gas_io.base = (uint16_t)gas->address;
 		gas_io.len = io_len[gas->access_size];
 
@@ -237,7 +241,7 @@ void register_pm1ab_handler(struct acrn_vm *vm)
 	register_gas_io_handler(vm, PM1B_CNT_PIO_IDX, &(sx_data->pm1b_cnt));
 }
 
-static bool rt_vm_pm1a_io_read(__unused struct acrn_vm *vm, __unused struct acrn_vcpu *vcpu,
+static bool rt_vm_pm1a_io_read(__unused struct acrn_vcpu *vcpu,
 						 __unused uint16_t addr, __unused size_t width)
 {
 	return false;
@@ -247,13 +251,17 @@ static bool rt_vm_pm1a_io_read(__unused struct acrn_vm *vm, __unused struct acrn
  * retval true means that we complete the emulation in HV and no need to re-inject the request to DM.
  * retval false means that we should re-inject the request to DM.
  */
-static bool rt_vm_pm1a_io_write(struct acrn_vm *vm, uint16_t addr, size_t width, uint32_t v)
+/**
+ * @pre vcpu != NULL
+ * @pre vcpu->vm != NULL
+ */
+static bool rt_vm_pm1a_io_write(struct acrn_vcpu *vcpu, uint16_t addr, size_t width, uint32_t v)
 {
 	if (width != 2U) {
 		pr_dbg("Invalid address (0x%x) or width (0x%x)", addr, width);
 	} else {
 		if ((((v & VIRTUAL_PM1A_SLP_EN) != 0U) && (((v & VIRTUAL_PM1A_SLP_TYP) >> 10U) == 5U)) != 0U) {
-			vm->state = VM_POWERING_OFF;
+			vcpu->vm->state = VM_POWERING_OFF;
 		}
 	}
 
@@ -264,7 +272,6 @@ void register_rt_vm_pm1a_ctl_handler(struct acrn_vm *vm)
 {
 	struct vm_io_range io_range;
 
-	io_range.flags = IO_ATTR_RW;
 	io_range.base = VIRTUAL_PM1A_CNT_ADDR;
 	io_range.len = 1U;
 

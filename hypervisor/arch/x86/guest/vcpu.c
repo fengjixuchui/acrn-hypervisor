@@ -67,9 +67,9 @@ void vcpu_set_rip(struct acrn_vcpu *vcpu, uint64_t val)
 	bitmap_set_lock(CPU_REG_RIP, &vcpu->reg_updated);
 }
 
-uint64_t vcpu_get_rsp(struct acrn_vcpu *vcpu)
+uint64_t vcpu_get_rsp(const struct acrn_vcpu *vcpu)
 {
-	struct run_context *ctx =
+	const struct run_context *ctx =
 		&vcpu->arch.contexts[vcpu->arch.cur_context].run_ctx;
 
 	return ctx->guest_cpu_regs.regs.rsp;
@@ -147,7 +147,7 @@ void vcpu_set_guest_msr(struct acrn_vcpu *vcpu, uint32_t msr, uint64_t val)
 /*
  * Write the eoi_exit_bitmaps to VMCS fields
  */
-void vcpu_set_vmcs_eoi_exit(struct acrn_vcpu *vcpu)
+void vcpu_set_vmcs_eoi_exit(const struct acrn_vcpu *vcpu)
 {
 	pr_dbg("%s", __func__);
 
@@ -299,7 +299,7 @@ void set_vcpu_regs(struct acrn_vcpu *vcpu, struct acrn_vcpu_regs *vcpu_regs)
 			vcpu_regs->cr0);
 }
 
-static struct acrn_vcpu_regs realmode_init_regs = {
+static struct acrn_vcpu_regs realmode_init_vregs = {
 	.gdt = {
 		.limit = 0xFFFFU,
 		.base = 0UL,
@@ -318,9 +318,40 @@ static struct acrn_vcpu_regs realmode_init_regs = {
 	.cr4 = 0UL,
 };
 
+static uint64_t init_vgdt[] = {
+	0x0UL,
+	0x0UL,
+	0x00CF9B000000FFFFUL,   /* Linear Code */
+	0x00CF93000000FFFFUL,   /* Linear Data */
+};
+
+static struct acrn_vcpu_regs protect_mode_init_vregs = {
+	.cs_ar = PROTECTED_MODE_CODE_SEG_AR,
+	.cs_limit = PROTECTED_MODE_SEG_LIMIT,
+	.cs_sel = 0x10U,
+	.cr0 = CR0_ET | CR0_NE | CR0_PE,
+	.ds_sel = 0x18U,
+	.ss_sel = 0x18U,
+	.es_sel = 0x18U,
+};
+
 void reset_vcpu_regs(struct acrn_vcpu *vcpu)
 {
-	set_vcpu_regs(vcpu, &realmode_init_regs);
+	set_vcpu_regs(vcpu, &realmode_init_vregs);
+}
+
+void init_vcpu_protect_mode_regs(struct acrn_vcpu *vcpu, uint64_t vgdt_base_gpa)
+{
+	struct acrn_vcpu_regs vcpu_regs;
+
+	(void)memcpy_s((void*)&vcpu_regs, sizeof(struct acrn_vcpu_regs),
+		(void *)&protect_mode_init_vregs, sizeof(struct acrn_vcpu_regs));
+
+	vcpu_regs.gdt.base = vgdt_base_gpa;
+	vcpu_regs.gdt.limit = sizeof(init_vgdt) - 1U;
+	(void)copy_to_gpa(vcpu->vm, &init_vgdt, vgdt_base_gpa, sizeof(init_vgdt));
+
+	set_vcpu_regs(vcpu, &vcpu_regs);
 }
 
 void set_vcpu_startup_entry(struct acrn_vcpu *vcpu, uint64_t entry)
@@ -474,8 +505,9 @@ int32_t run_vcpu(struct acrn_vcpu *vcpu)
 		pr_info("VM %d Starting VCPU %hu",
 				vcpu->vm->vm_id, vcpu->vcpu_id);
 
-		if (vcpu->arch.vpid != 0U)
+		if (vcpu->arch.vpid != 0U) {
 			exec_vmwrite16(VMX_VPID, vcpu->arch.vpid);
+		}
 
 		/*
 		 * A power-up or a reset invalidates all linear mappings,
@@ -491,8 +523,9 @@ int32_t run_vcpu(struct acrn_vcpu *vcpu)
 		 * currently, there is no other place to do vmcs switch
 		 * Please add IBPB set for future vmcs switch case(like trusty)
 		 */
-		if (ibrs_type == IBRS_RAW)
+		if (ibrs_type == IBRS_RAW) {
 			msr_write(MSR_IA32_PRED_CMD, PRED_SET_IBPB);
+		}
 
 #ifdef CONFIG_L1D_FLUSH_VMENTRY_ENABLED
 		cpu_l1d_flush();

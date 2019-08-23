@@ -6,16 +6,18 @@
 
 #include <vm_config.h>
 #include <pci_devices.h>
+#include <vpci.h>
 
 /* The vbar_base info of pt devices is included in device MACROs which defined in
  *           arch/x86/configs/$(CONFIG_BOARD)/pci_devices.h.
  * The memory range of vBAR should exactly match with the e820 layout of VM.
  */
 
-struct acrn_vm_pci_dev_config vm0_pci_devs[VM0_CONFIG_PCI_PTDEV_NUM] = {
+struct acrn_vm_pci_dev_config vm0_pci_devs[VM0_CONFIG_PCI_DEV_NUM] = {
 	{
 		.emu_type = PCI_DEV_TYPE_HVEMUL,
 		.vbdf.bits = {.b = 0x00U, .d = 0x00U, .f = 0x00U},
+		.vdev_ops = &vhostbridge_ops,
 	},
 	{
 		.emu_type = PCI_DEV_TYPE_PTDEV,
@@ -29,10 +31,11 @@ struct acrn_vm_pci_dev_config vm0_pci_devs[VM0_CONFIG_PCI_PTDEV_NUM] = {
 	},
 };
 
-struct acrn_vm_pci_dev_config vm1_pci_devs[VM1_CONFIG_PCI_PTDEV_NUM] = {
+struct acrn_vm_pci_dev_config vm1_pci_devs[VM1_CONFIG_PCI_DEV_NUM] = {
 	{
 		.emu_type = PCI_DEV_TYPE_HVEMUL,
 		.vbdf.bits = {.b = 0x00U, .d = 0x00U, .f = 0x00U},
+		.vdev_ops = &vhostbridge_ops,
 	},
 	{
 		.emu_type = PCI_DEV_TYPE_PTDEV,

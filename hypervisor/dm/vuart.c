@@ -161,8 +161,8 @@ void vuart_toggle_intr(const struct acrn_vuart *vu)
 	vioapic_get_rte(vu->vm, vu->irq, &rte);
 
 	/* TODO:
-	 * Here should assert vuart irq according to CONFIG_COM_IRQ polarity.
-	 * The best way is to get the polarity info from ACIP table.
+	 * Here should assert vuart irq according to vCOM1_IRQ polarity.
+	 * The best way is to get the polarity info from ACPI table.
 	 * Here we just get the info from vioapic configuration.
 	 * based on this, we can still have irq storm during guest
 	 * modify the vioapic setting, as it's only for debug uart,
@@ -339,11 +339,15 @@ static void write_reg(struct acrn_vuart *vu, uint16_t reg, uint8_t value_u8)
 	vuart_unlock(vu, rflags);
 }
 
-static bool vuart_write(struct acrn_vm *vm, uint16_t offset_arg,
+/**
+ * @pre vcpu != NULL
+ * @pre vcpu->vm != NULL
+ */
+static bool vuart_write(struct acrn_vcpu *vcpu, uint16_t offset_arg,
 			__unused size_t width, uint32_t value)
 {
 	uint16_t offset = offset_arg;
-	struct acrn_vuart *vu = find_vuart_by_port(vm, offset);
+	struct acrn_vuart *vu = find_vuart_by_port(vcpu->vm, offset);
 	uint8_t value_u8 = (uint8_t)value;
 	struct acrn_vuart *target_vu = NULL;
 	uint64_t rflags;
@@ -366,12 +370,15 @@ static bool vuart_write(struct acrn_vm *vm, uint16_t offset_arg,
 	return true;
 }
 
-static bool vuart_read(struct acrn_vm *vm, struct acrn_vcpu *vcpu, uint16_t offset_arg,
-			__unused size_t width)
+/**
+ * @pre vcpu != NULL
+ * @pre vcpu->vm != NULL
+ */
+static bool vuart_read(struct acrn_vcpu *vcpu, uint16_t offset_arg, __unused size_t width)
 {
 	uint16_t offset = offset_arg;
 	uint8_t iir, reg, intr_reason;
-	struct acrn_vuart *vu = find_vuart_by_port(vm, offset);
+	struct acrn_vuart *vu = find_vuart_by_port(vcpu->vm, offset);
 	struct pio_request *pio_req = &vcpu->req.reqs.pio;
 	uint64_t rflags;
 
@@ -461,7 +468,6 @@ static bool vuart_register_io_handler(struct acrn_vm *vm, uint16_t port_base, ui
 	bool ret = true;
 
 	struct vm_io_range range = {
-		.flags = IO_ATTR_RW,
 		.base = port_base,
 		.len = 8U
 	};
