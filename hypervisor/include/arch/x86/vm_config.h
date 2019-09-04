@@ -11,7 +11,7 @@
 #include <pci.h>
 #include <multiboot.h>
 #include <acrn_common.h>
-#include <mptable.h>
+#include <vacpi.h>
 #include <vm_configurations.h>
 #include <sgx.h>
 

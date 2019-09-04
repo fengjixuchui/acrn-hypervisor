@@ -31,9 +31,9 @@
 #define LEVEL_WIDTH 9U
 
 #define ROOT_ENTRY_LOWER_PRESENT_POS        (0U)
-#define ROOT_ENTRY_LOWER_PRESENT_MASK       (1UL)
+#define ROOT_ENTRY_LOWER_PRESENT_MASK       (1UL << ROOT_ENTRY_LOWER_PRESENT_POS)
 #define ROOT_ENTRY_LOWER_CTP_POS            (12U)
-#define ROOT_ENTRY_LOWER_CTP_MASK           (0xFFFFFFFFFFFFFUL)
+#define ROOT_ENTRY_LOWER_CTP_MASK           (0xFFFFFFFFFFFFFUL << ROOT_ENTRY_LOWER_CTP_POS)
 
 /* 4 iommu fault register state */
 #define	IOMMU_FAULT_REGISTER_STATE_NUM	4U
@@ -42,7 +42,7 @@
 #define CTX_ENTRY_UPPER_AW_POS          (0U)
 #define CTX_ENTRY_UPPER_AW_MASK         (0x7UL << CTX_ENTRY_UPPER_AW_POS)
 #define CTX_ENTRY_UPPER_DID_POS         (8U)
-#define CTX_ENTRY_UPPER_DID_MASK        (0x3FUL << CTX_ENTRY_UPPER_DID_POS)
+#define CTX_ENTRY_UPPER_DID_MASK        (0xFFFFUL << CTX_ENTRY_UPPER_DID_POS)
 #define CTX_ENTRY_LOWER_P_POS           (0U)
 #define CTX_ENTRY_LOWER_P_MASK          (0x1UL << CTX_ENTRY_LOWER_P_POS)
 #define CTX_ENTRY_LOWER_FPD_POS         (1U)
@@ -287,16 +287,18 @@ static inline void dmar_wait_completion(const struct dmar_drhd_rt *dmar_unit, ui
 	}
 }
 
-/* flush cache when root table, context table updated */
-static void iommu_flush_cache(const struct dmar_drhd_rt *dmar_unit,
-			      void *p, uint32_t size)
+/* Flush CPU cache when root table, context table or second-level translation teable updated
+ * In the context of ACRN, GPA to HPA mapping relationship is not changed after VM created,
+ * skip flushing iotlb to avoid performance penalty.
+ */
+void iommu_flush_cache(const void *p, uint32_t size)
 {
 	uint32_t i;
 
 	/* if vtd support page-walk coherency, no need to flush cacheline */
-	if (iommu_ecap_c(dmar_unit->ecap) == 0U) {
+	if (!iommu_page_walk_coherent) {
 		for (i = 0U; i < size; i += CACHE_LINE_SIZE) {
-			clflush((char *)p + i);
+			clflush((const char *)p + i);
 		}
 	}
 }
@@ -1088,7 +1090,7 @@ static int32_t add_iommu_device(struct iommu_domain *domain, uint16_t segment, u
 
 			root_entry->hi_64 = 0UL;
 			root_entry->lo_64 = lo_64;
-			iommu_flush_cache(dmar_unit, root_entry, sizeof(struct dmar_entry));
+			iommu_flush_cache(root_entry, sizeof(struct dmar_entry));
 		} else {
 			context_table_addr = dmar_get_bitslice(root_entry->lo_64,
 					ROOT_ENTRY_LOWER_CTP_MASK, ROOT_ENTRY_LOWER_CTP_POS);
@@ -1143,7 +1145,7 @@ static int32_t add_iommu_device(struct iommu_domain *domain, uint16_t segment, u
 
 				context_entry->hi_64 = hi_64;
 				context_entry->lo_64 = lo_64;
-				iommu_flush_cache(dmar_unit, context_entry, sizeof(struct dmar_entry));
+				iommu_flush_cache(context_entry, sizeof(struct dmar_entry));
 			}
 		}
 	}
@@ -1192,7 +1194,7 @@ static int32_t remove_iommu_device(const struct iommu_domain *domain, uint16_t s
 				/* clear the present bit first */
 				context_entry->lo_64 = 0UL;
 				context_entry->hi_64 = 0UL;
-				iommu_flush_cache(dmar_unit, context_entry, sizeof(struct dmar_entry));
+				iommu_flush_cache(context_entry, sizeof(struct dmar_entry));
 
 				sid.bits.b = bus;
 				sid.bits.d = pci_slot(devfun);
@@ -1298,9 +1300,6 @@ int32_t move_pt_device(const struct iommu_domain *from_domain, struct iommu_doma
 
 void enable_iommu(void)
 {
-	if (!iommu_page_walk_coherent) {
-		cache_flush_invalidate_all();
-	}
 	do_action_for_iommus(dmar_enable);
 }
 
@@ -1376,7 +1375,7 @@ int32_t dmar_assign_irte(struct intr_source intr_src, union dmar_ir_entry irte, 
 		ir_entry->entry.hi_64 = irte.entry.hi_64;
 		ir_entry->entry.lo_64 = irte.entry.lo_64;
 
-		iommu_flush_cache(dmar_unit, ir_entry, sizeof(union dmar_ir_entry));
+		iommu_flush_cache(ir_entry, sizeof(union dmar_ir_entry));
 		dmar_invalid_iec(dmar_unit, index, 0U, false);
 	}
 	return ret;
@@ -1407,7 +1406,7 @@ void dmar_free_irte(struct intr_source intr_src, uint16_t index)
 		ir_entry = ir_table + index;
 		ir_entry->bits.present = 0x0UL;
 
-		iommu_flush_cache(dmar_unit, ir_entry, sizeof(union dmar_ir_entry));
+		iommu_flush_cache(ir_entry, sizeof(union dmar_ir_entry));
 		dmar_invalid_iec(dmar_unit, index, 0U, false);
 	}
 }
