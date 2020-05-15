@@ -8,6 +8,7 @@
 #include <platform_acpi_info.h>
 #include <per_cpu.h>
 #include <io.h>
+#include <msr.h>
 #include <pgtable.h>
 #include <host_pm.h>
 #include <trampoline.h>
@@ -16,7 +17,6 @@
 #include <ioapic.h>
 #include <vtd.h>
 #include <lapic.h>
-#include <vcpu.h>
 
 struct cpu_context cpu_ctx;
 
@@ -119,7 +119,8 @@ static uint32_t acpi_gas_read(const struct acpi_generic_address *gas)
 	return ret;
 }
 
-void do_acpi_s3(struct pm_s_state_data *sstate_data, uint32_t pm1a_cnt_val, uint32_t pm1b_cnt_val)
+/* This function supports enter S3 or S5 according to the value given to pm1a_cnt_val and pm1b_cnt_val */
+void do_acpi_sx(const struct pm_s_state_data *sstate_data, uint32_t pm1a_cnt_val, uint32_t pm1b_cnt_val)
 {
 	uint32_t s1, s2;
 
@@ -147,7 +148,30 @@ void do_acpi_s3(struct pm_s_state_data *sstate_data, uint32_t pm1a_cnt_val, uint
 	} while ((s1 & (1U << BIT_WAK_STS)) == 0U);
 }
 
-void host_enter_s3(struct pm_s_state_data *sstate_data, uint32_t pm1a_cnt_val, uint32_t pm1b_cnt_val)
+static uint32_t system_pm1a_cnt_val, system_pm1b_cnt_val;
+void save_s5_reg_val(uint32_t pm1a_cnt_val, uint32_t pm1b_cnt_val)
+{
+	system_pm1a_cnt_val = pm1a_cnt_val;
+	system_pm1b_cnt_val = pm1b_cnt_val;
+}
+
+void shutdown_system(void)
+{
+	struct pm_s_state_data *sx_data = get_host_sstate_data();
+	do_acpi_sx(sx_data, system_pm1a_cnt_val, system_pm1b_cnt_val);
+}
+
+static void suspend_tsc(__unused void *data)
+{
+	per_cpu(tsc_suspend, get_pcpu_id()) = rdtsc();
+}
+
+static void resume_tsc(__unused void *data)
+{
+	msr_write(MSR_IA32_TIME_STAMP_COUNTER, per_cpu(tsc_suspend, get_pcpu_id()));
+}
+
+void host_enter_s3(const struct pm_s_state_data *sstate_data, uint32_t pm1a_cnt_val, uint32_t pm1b_cnt_val)
 {
 	uint64_t pmain_entry_saved;
 
@@ -157,6 +181,10 @@ void host_enter_s3(struct pm_s_state_data *sstate_data, uint32_t pm1a_cnt_val, u
 	*(sstate_data->wake_vector_32) = (uint32_t)get_trampoline_start16_paddr();
 
 	clac();
+
+	/* Save TSC on all PCPU */
+	smp_call_function(get_active_pcpu_bitmap(), suspend_tsc, NULL);
+
 	/* offline all APs */
 	stop_pcpus();
 
@@ -184,7 +212,6 @@ void host_enter_s3(struct pm_s_state_data *sstate_data, uint32_t pm1a_cnt_val, u
 	resume_lapic();
 	resume_iommu();
 	resume_ioapic();
-	resume_console();
 
 	vmx_on();
 	CPU_IRQ_ENABLE();
@@ -198,6 +225,14 @@ void host_enter_s3(struct pm_s_state_data *sstate_data, uint32_t pm1a_cnt_val, u
 	if (!start_pcpus(AP_MASK)) {
 		panic("Failed to start all APs!");
 	}
+
+	/* Restore TSC on all PCPU
+	 * Caution: There should no timer setup before TSC resumed.
+	 */
+	smp_call_function(get_active_pcpu_bitmap(), resume_tsc, NULL);
+
+	/* console must be resumed after TSC restored since it will setup timer base on TSC */
+	resume_console();
 }
 
 void reset_host(void)
@@ -208,6 +243,11 @@ void reset_host(void)
 	/* TODO: gracefully shut down all guests before doing host reset. */
 
 	/*
+	 * Assumption:
+	 * The platform we are running must support at least one of reset method:
+	 *   - ACPI reset
+	 *   - 0xcf9 reset
+	 *
 	 * UEFI more likely sets the reset value as 0x6 (not 0xe) for 0xcf9 port.
 	 * This asserts PLTRST# to reset devices on the platform, but not the
 	 * SLP_S3#/4#/5# signals, which power down the systems. This might not be
@@ -217,21 +257,12 @@ void reset_host(void)
 		(gas->bit_width == 8U) && (gas->bit_offset == 0U) &&
 		(gas->address != 0U) && (gas->address != 0xcf9U)) {
 		pio_write8(host_reset_reg.val, (uint16_t)host_reset_reg.reg.address);
+	} else {
+		/* making sure bit 2 (RST_CPU) is '0', when the reset command is issued. */
+		pio_write8(0x2U, 0xcf9U);
+		udelay(50U);
+		pio_write8(0xeU, 0xcf9U);
 	}
-
-	/*
-	 * Fall back
-	 * making sure bit 2 (RST_CPU) is '0', when the reset command is issued.
-	 */
-	pio_write8(0x2U, 0xcf9U);
-	pio_write8(0xeU, 0xcf9U);
-
-	/*
-	 * Fall back
-	 * keyboard controller might cause the INIT# being asserted,
-	 * and not power cycle the system.
-	 */
-	pio_write8(0xfeU, 0x64U);
 
 	pr_fatal("%s(): can't reset host.", __func__);
 	while (1) {

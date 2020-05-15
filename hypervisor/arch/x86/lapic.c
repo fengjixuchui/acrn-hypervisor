@@ -75,18 +75,13 @@ void early_init_lapic(void)
 void init_lapic(uint16_t pcpu_id)
 {
 	per_cpu(lapic_ldr, pcpu_id) = (uint32_t) msr_read(MSR_IA32_EXT_APIC_LDR);
-	/* Mask all LAPIC LVT entries before enabling the local APIC */
-	msr_write(MSR_IA32_EXT_APIC_LVT_CMCI, LAPIC_LVT_MASK);
-	msr_write(MSR_IA32_EXT_APIC_LVT_TIMER, LAPIC_LVT_MASK);
-	msr_write(MSR_IA32_EXT_APIC_LVT_THERMAL, LAPIC_LVT_MASK);
-	msr_write(MSR_IA32_EXT_APIC_LVT_PMI, LAPIC_LVT_MASK);
-	msr_write(MSR_IA32_EXT_APIC_LVT_LINT0, LAPIC_LVT_MASK);
-	msr_write(MSR_IA32_EXT_APIC_LVT_LINT1, LAPIC_LVT_MASK);
-	msr_write(MSR_IA32_EXT_APIC_LVT_ERROR, LAPIC_LVT_MASK);
+
+	/* Set the mask bits for all the LVT entries by disabling a local APIC software. */
+	msr_write(MSR_IA32_EXT_APIC_SIVR, 0UL);
 
 	/* Enable Local APIC */
 	/* TODO: add spurious-interrupt handler */
-	msr_write(MSR_IA32_EXT_APIC_SIVR, LAPIC_SVR_APIC_ENABLE_MASK | LAPIC_SVR_VECTOR);
+	msr_write(MSR_IA32_EXT_APIC_SIVR, APIC_SVR_ENABLE | APIC_SVR_VECTOR);
 
 	/* Ensure there are no ISR bits set. */
 	clear_lapic_isr();
@@ -146,7 +141,7 @@ void suspend_lapic(void)
 
 	/* disable APIC with software flag */
 	val = msr_read(MSR_IA32_EXT_APIC_SIVR);
-	val = (~(uint64_t)LAPIC_SVR_APIC_ENABLE_MASK) & val;
+	val = (~(uint64_t)APIC_SVR_ENABLE) & val;
 	msr_write(MSR_IA32_EXT_APIC_SIVR, val);
 }
 
@@ -240,7 +235,7 @@ void send_dest_ipi_mask(uint32_t dest_mask, uint32_t vector)
 
 	pcpu_id = ffs64(mask);
 
-	while (pcpu_id < CONFIG_MAX_PCPU_NUM) {
+	while (pcpu_id < MAX_PCPU_NUM) {
 		bitmap32_clear_nolock(pcpu_id, &mask);
 		if (is_pcpu_active(pcpu_id)) {
 			icr.value_32.hi_32 = per_cpu(lapic_id, pcpu_id);
@@ -270,21 +265,16 @@ void send_single_ipi(uint16_t pcpu_id, uint32_t vector)
 }
 
 /**
- * @pre pcpu_id < CONFIG_MAX_PCPU_NUM
+ * @pre pcpu_id < MAX_PCPU_NUM
  *
  * @return None
  */
-void send_single_init(uint16_t pcpu_id)
+void send_single_nmi(uint16_t pcpu_id)
 {
 	union apic_icr icr;
 
-	/*
-	 * Intel SDM Vol3 23.8:
-	 *   The INIT signal is blocked whenever a logical processor is in VMX root operation.
-	 *   It is not blocked in VMX nonroot operation. Instead, INITs cause VM exits
-	 */
 	icr.value_32.hi_32 = per_cpu(lapic_id, pcpu_id);
-	icr.value_32.lo_32 = (INTR_LAPIC_ICR_PHYSICAL << 11U) | (INTR_LAPIC_ICR_INIT << 8U);
+	icr.value_32.lo_32 = (INTR_LAPIC_ICR_PHYSICAL << 11U) | (INTR_LAPIC_ICR_NMI << 8U);
 
 	msr_write(MSR_IA32_EXT_APIC_ICR, icr.value);
 }

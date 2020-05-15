@@ -45,6 +45,11 @@
 #define	PCI_EMUL_MEMBASE64	0x100000000UL	/* 4GB */
 #define	PCI_EMUL_MEMLIMIT64	0x140000000UL	/* 5GB */
 
+/* Currently,only gvt need reserved bar regions,
+ * so just hardcode REGION_NUMS=5 here
+ */
+#define REGION_NUMS 5
+
 struct vmctx;
 struct pci_vdev;
 struct memory_region;
@@ -65,11 +70,6 @@ struct pci_vdev_ops {
 
 	/* ops related to physical resources */
 	void	(*vdev_phys_access)(struct vmctx *ctx, struct pci_vdev *dev);
-
-	/* update BAR map callback */
-	void	(*vdev_update_bar_map)(struct vmctx *ctx,
-				struct pci_vdev *dev, int idx,
-				uint64_t orig_addr);
 
 	/* config space read/write callbacks */
 	int	(*vdev_cfgwrite)(struct vmctx *ctx, int vcpu,
@@ -243,6 +243,20 @@ struct pciecap {
 } __attribute__((packed));
 static_assert(sizeof(struct pciecap) == 60, "compile-time assertion failed");
 
+struct mmio_rsvd_rgn {
+	uint64_t start;
+	uint64_t end;
+	int idx;
+	int bar_type;
+	/* if vdev=NULL, it also indicates this mmio_rsvd_rgn is not used */
+	struct pci_vdev *vdev;
+};
+
+extern struct mmio_rsvd_rgn reserved_bar_regions[REGION_NUMS];
+int create_mmio_rsvd_rgn(uint64_t start,
+                uint64_t end, int idx, int bar_type, struct pci_vdev *vdev);
+void destory_mmio_rsvd_rgns(struct pci_vdev *vdev);
+
 typedef void (*pci_lintr_cb)(int b, int s, int pin, int pirq_pin,
 			     int ioapic_irq, void *arg);
 
@@ -258,6 +272,7 @@ int	pci_emul_alloc_bar(struct pci_vdev *pdi, int idx,
 int	pci_emul_alloc_pbar(struct pci_vdev *pdi, int idx,
 			    uint64_t hostbase, enum pcibar_type type,
 			    uint64_t size);
+void	pci_emul_free_bar(struct pci_vdev *pdi, int idx);
 void	pci_emul_free_bars(struct pci_vdev *pdi);
 int	pci_emul_add_capability(struct pci_vdev *dev, u_char *capdata,
 				int caplen);

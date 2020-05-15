@@ -58,7 +58,7 @@ static int32_t hcall_profiling_ops(struct acrn_vm *vm, uint64_t cmd, uint64_t pa
 		ret = profiling_get_status_info(vm, param);
 		break;
 	default:
-		pr_err("%s: invalid profiling command %llu\n", __func__, cmd);
+		pr_err("%s: invalid profiling command %lu\n", __func__, cmd);
 		ret = -1;
 		break;
 	}
@@ -81,10 +81,7 @@ static int32_t hcall_setup_sbuf(struct acrn_vm *vm, uint64_t param)
 	struct sbuf_setup_param ssp;
 	uint64_t *hva;
 
-	(void)memset((void *)&ssp, 0U, sizeof(ssp));
-
 	if (copy_from_gpa(vm, &ssp, param, sizeof(ssp)) != 0) {
-		pr_err("%s: Unable copy param to vm\n", __func__);
 		return -1;
 	}
 
@@ -111,21 +108,13 @@ static int32_t hcall_setup_hv_npk_log(struct acrn_vm *vm, uint64_t param)
 {
 	struct hv_npk_log_param npk_param;
 
-	(void)memset((void *)&npk_param, 0U, sizeof(npk_param));
-
 	if (copy_from_gpa(vm, &npk_param, param, sizeof(npk_param)) != 0) {
-		pr_err("%s: Unable copy param from vm\n", __func__);
 		return -1;
 	}
 
 	npk_log_setup(&npk_param);
 
-	if (copy_to_gpa(vm, &npk_param, param, sizeof(npk_param)) != 0) {
-		pr_err("%s: Unable copy param to vm\n", __func__);
-		return -1;
-	}
-
-	return 0;
+	return copy_to_gpa(vm, &npk_param, param, sizeof(npk_param));
 }
 
 /**
@@ -142,18 +131,12 @@ static int32_t hcall_setup_hv_npk_log(struct acrn_vm *vm, uint64_t param)
  */
 static int32_t hcall_get_hw_info(struct acrn_vm *vm, uint64_t param)
 {
-	int32_t ret = 0;
 	struct acrn_hw_info hw_info;
 
 	(void)memset((void *)&hw_info, 0U, sizeof(hw_info));
 
 	hw_info.cpu_num = get_pcpu_nums();
-	ret = copy_to_gpa(vm, &hw_info, param, sizeof(hw_info));
-	if (ret != 0) {
-		pr_err("%s: Unable to copy param to vm", __func__);
-	}
-
-	return ret;
+	return copy_to_gpa(vm, &hw_info, param, sizeof(hw_info));
 }
 
 /**

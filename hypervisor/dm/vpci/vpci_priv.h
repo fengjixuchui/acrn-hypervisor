@@ -30,59 +30,22 @@
 #ifndef VPCI_PRIV_H_
 #define VPCI_PRIV_H_
 
+#include <list.h>
 #include <pci.h>
+
+static inline struct acrn_vm *vpci2vm(const struct acrn_vpci *vpci)
+{
+	return container_of(vpci, struct acrn_vm, vpci);
+}
+
+static inline bool is_quirk_ptdev(const struct pci_vdev *vdev)
+{
+	return ((vdev->flags & QUIRK_PTDEV) != 0U);
+}
 
 static inline bool in_range(uint32_t value, uint32_t lower, uint32_t len)
 {
 	return ((value >= lower) && (value < (lower + len)));
-}
-
-/**
- * @pre vdev != NULL
- */
-static inline uint8_t pci_vdev_read_cfg_u8(const struct pci_vdev *vdev, uint32_t offset)
-{
-	return vdev->cfgdata.data_8[offset];
-}
-
-/**
- * @pre vdev != NULL
- */
-static inline uint16_t pci_vdev_read_cfg_u16(const struct pci_vdev *vdev, uint32_t offset)
-{
-	return vdev->cfgdata.data_16[offset >> 1U];
-}
-
-/**
- * @pre vdev != NULL
- */
-static inline uint32_t pci_vdev_read_cfg_u32(const struct pci_vdev *vdev, uint32_t offset)
-{
-	return vdev->cfgdata.data_32[offset >> 2U];
-}
-
-/**
- * @pre vdev != NULL
- */
-static inline void pci_vdev_write_cfg_u8(struct pci_vdev *vdev, uint32_t offset, uint8_t val)
-{
-	vdev->cfgdata.data_8[offset] = val;
-}
-
-/**
- * @pre vdev != NULL
- */
-static inline void pci_vdev_write_cfg_u16(struct pci_vdev *vdev, uint32_t offset, uint16_t val)
-{
-	vdev->cfgdata.data_16[offset >> 1U] = val;
-}
-
-/**
- * @pre vdev != NULL
- */
-static inline void pci_vdev_write_cfg_u32(struct pci_vdev *vdev, uint32_t offset, uint32_t val)
-{
-	vdev->cfgdata.data_32[offset >> 2U] = val;
 }
 
 /**
@@ -101,12 +64,36 @@ static inline bool msixcap_access(const struct pci_vdev *vdev, uint32_t offset)
 	return (has_msix_cap(vdev) && in_range(offset, vdev->msix.capoff, vdev->msix.caplen));
 }
 
+/*
+ * @pre vdev != NULL
+ */
+static inline bool has_sriov_cap(const struct pci_vdev *vdev)
+{
+	return (vdev->sriov.capoff != 0U);
+}
+
+/*
+ * @pre vdev != NULL
+ */
+static inline bool sriovcap_access(const struct pci_vdev *vdev, uint32_t offset)
+{
+	return (has_sriov_cap(vdev) && in_range(offset, vdev->sriov.capoff, vdev->sriov.caplen));
+}
+
 /**
  * @pre vdev != NULL
  */
 static inline bool vbar_access(const struct pci_vdev *vdev, uint32_t offset)
 {
 	return is_bar_offset(vdev->nr_bars, offset);
+}
+
+/**
+ * @pre vdev != NULL
+ */
+static inline bool cfg_header_access(uint32_t offset)
+{
+	return (offset < PCI_CFG_HEADER_LENGTH);
 }
 
 /**
@@ -125,24 +112,30 @@ static inline bool msicap_access(const struct pci_vdev *vdev, uint32_t offset)
 	return (has_msi_cap(vdev) && in_range(offset, vdev->msi.capoff, vdev->msi.caplen));
 }
 
-void init_vdev_pt(struct pci_vdev *vdev);
-void vdev_pt_read_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t *val);
-void vdev_pt_write_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val);
+void init_vdev_pt(struct pci_vdev *vdev, bool is_pf_vdev);
+void deinit_vdev_pt(struct pci_vdev *vdev);
+void vdev_pt_write_vbar(struct pci_vdev *vdev, uint32_t idx, uint32_t val);
+void vdev_pt_map_msix(struct pci_vdev *vdev, bool hold_lock);
 
 void init_vmsi(struct pci_vdev *vdev);
-void vmsi_read_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t *val);
-void vmsi_write_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val);
-void deinit_vmsi(const struct pci_vdev *vdev);
+void read_vmsi_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t *val);
+void write_vmsi_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val);
+void deinit_vmsi(struct pci_vdev *vdev);
 
 void init_vmsix(struct pci_vdev *vdev);
-int32_t vmsix_table_mmio_access_handler(struct io_request *io_req, void *handler_private_data);
-void vmsix_read_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t *val);
-void vmsix_write_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val);
-void deinit_vmsix(const struct pci_vdev *vdev);
+int32_t vmsix_handle_table_mmio_access(struct io_request *io_req, void *handler_private_data);
+void read_vmsix_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t *val);
+void write_vmsix_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val);
+void deinit_vmsix(struct pci_vdev *vdev);
 
-uint32_t pci_vdev_read_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes);
-void pci_vdev_write_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val);
+void init_vsriov(struct pci_vdev *vdev);
+void read_sriov_cap_reg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t *val);
+void write_sriov_cap_reg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val);
+uint32_t sriov_bar_offset(const struct pci_vdev *vdev, uint32_t bar_idx);
 
-struct pci_vdev *pci_find_vdev(const struct acrn_vpci *vpci, union pci_bdf vbdf);
+uint32_t pci_vdev_read_vcfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes);
+void pci_vdev_write_vcfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val);
 
+uint32_t pci_vdev_read_vbar(const struct pci_vdev *vdev, uint32_t idx);
+void pci_vdev_write_vbar(struct pci_vdev *vdev, uint32_t idx, uint32_t val);
 #endif /* VPCI_PRIV_H_ */

@@ -560,14 +560,13 @@ static bool is_desc_valid(const struct seg_desc *desc, uint32_t prot)
  *@pre prot must be PROT_READ or PROT_WRITE
  */
 static void vie_calculate_gla(enum vm_cpu_mode cpu_mode, enum cpu_reg_name seg,
-	const struct seg_desc *desc, uint64_t offset_arg, uint8_t addrsize, uint64_t *gla)
+	const struct seg_desc *desc, uint64_t offset, uint8_t addrsize, uint64_t *gla)
 {
 	uint64_t firstoff, segbase;
-	uint64_t offset = offset_arg;
 	uint8_t glasize;
 
 	firstoff = offset;
-	glasize = (cpu_mode == CPU_MODE_64BIT) ? 8U: 4U;
+	glasize = (cpu_mode == CPU_MODE_64BIT) ? 8U : 4U;
 
 	/*
 	 * In 64-bit mode all segments except %fs and %gs have a segment
@@ -1641,62 +1640,12 @@ static int32_t emulate_bittest(struct acrn_vcpu *vcpu, const struct instr_emul_v
 	return ret;
 }
 
-static int32_t vmm_emulate_instruction(struct acrn_vcpu *vcpu)
-{
-	struct instr_emul_vie *vie = &vcpu->inst_ctxt.vie;
-	int32_t error;
-
-	if (vie->decoded != 0U) {
-		switch (vie->op.op_type) {
-		case VIE_OP_TYPE_GROUP1:
-			error = emulate_group1(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_CMP:
-			error = emulate_cmp(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_MOV:
-			error = emulate_mov(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_MOVSX:
-		case VIE_OP_TYPE_MOVZX:
-			error = emulate_movx(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_MOVS:
-			error = emulate_movs(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_STOS:
-			error = emulate_stos(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_AND:
-			error = emulate_and(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_TEST:
-			error = emulate_test(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_OR:
-			error = emulate_or(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_SUB:
-			error = emulate_sub(vcpu, vie);
-			break;
-		case VIE_OP_TYPE_BITTEST:
-			error = emulate_bittest(vcpu, vie);
-			break;
-		default:
-			error = -EINVAL;
-			break;
-		}
-	} else {
-		error = -EINVAL;
-	}
-
-	return error;
-}
-
 static int32_t vie_init(struct instr_emul_vie *vie, struct acrn_vcpu *vcpu)
 {
-	uint64_t guest_rip_gva = vcpu_get_rip(vcpu);
 	uint32_t inst_len = vcpu->arch.inst_len;
+	enum vm_cpu_mode cpu_mode;
+	struct seg_desc desc;
+	uint64_t guest_rip_gva;
 	uint32_t err_code;
 	uint64_t fault_addr;
 	int32_t ret;
@@ -1711,6 +1660,13 @@ static int32_t vie_init(struct instr_emul_vie *vie, struct acrn_vcpu *vcpu)
 		vie->base_register = CPU_REG_LAST;
 		vie->index_register = CPU_REG_LAST;
 		vie->segment_register = CPU_REG_LAST;
+
+		cpu_mode = get_vcpu_mode(vcpu);
+		vm_get_seg_desc(CPU_REG_CS, &desc);
+
+		/* VMX_GUEST_RIP is a natural-width field */
+		vie_calculate_gla(cpu_mode, CPU_REG_CS, &desc, vcpu_get_rip(vcpu),
+				8U, &guest_rip_gva);
 
 		err_code = PAGE_FAULT_ID_FLAG;
 		ret = copy_from_gva(vcpu, vie->inst, guest_rip_gva, inst_len, &err_code, &fault_addr);
@@ -2353,19 +2309,19 @@ int32_t decode_instruction(struct acrn_vcpu *vcpu)
 
 	emul_ctxt = &vcpu->inst_ctxt;
 	retval = vie_init(&emul_ctxt->vie, vcpu);
+
 	if (retval < 0) {
 		if (retval != -EFAULT) {
-			pr_err("init vie failed @ 0x%016llx:", vcpu_get_rip(vcpu));
+			pr_err("init vie failed @ 0x%016lx:", vcpu_get_rip(vcpu));
 		}
 	} else {
-
 		csar = exec_vmread32(VMX_GUEST_CS_ATTR);
 		cpu_mode = get_vcpu_mode(vcpu);
 
 		retval = local_decode_instruction(cpu_mode, seg_desc_def32(csar), &emul_ctxt->vie);
 
 		if (retval != 0) {
-			pr_err("decode instruction failed @ 0x%016llx:", vcpu_get_rip(vcpu));
+			pr_err("decode instruction failed @ 0x%016lx:", vcpu_get_rip(vcpu));
 			vcpu_inject_ud(vcpu);
 			retval = -EFAULT;
 		} else {
@@ -2404,5 +2360,52 @@ int32_t decode_instruction(struct acrn_vcpu *vcpu)
 
 int32_t emulate_instruction(struct acrn_vcpu *vcpu)
 {
-	return vmm_emulate_instruction(vcpu);
+	struct instr_emul_vie *vie = &vcpu->inst_ctxt.vie;
+	int32_t error;
+
+	if (vie->decoded != 0U) {
+		switch (vie->op.op_type) {
+		case VIE_OP_TYPE_GROUP1:
+			error = emulate_group1(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_CMP:
+			error = emulate_cmp(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_MOV:
+			error = emulate_mov(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_MOVSX:
+		case VIE_OP_TYPE_MOVZX:
+			error = emulate_movx(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_MOVS:
+			error = emulate_movs(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_STOS:
+			error = emulate_stos(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_AND:
+			error = emulate_and(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_TEST:
+			error = emulate_test(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_OR:
+			error = emulate_or(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_SUB:
+			error = emulate_sub(vcpu, vie);
+			break;
+		case VIE_OP_TYPE_BITTEST:
+			error = emulate_bittest(vcpu, vie);
+			break;
+		default:
+			error = -EINVAL;
+			break;
+		}
+	} else {
+		error = -EINVAL;
+	}
+
+	return error;
 }

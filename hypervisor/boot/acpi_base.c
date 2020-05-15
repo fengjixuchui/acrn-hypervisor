@@ -35,16 +35,17 @@
 #include <logmsg.h>
 #include <acrn_common.h>
 #include <util.h>
+#include <e820.h>
 
 static struct acpi_table_rsdp *acpi_rsdp;
 
-static struct acpi_table_rsdp *found_rsdp(char *base, int32_t length)
+static struct acpi_table_rsdp *found_rsdp(char *base, uint64_t length)
 {
 	struct acpi_table_rsdp *rsdp, *ret = NULL;
-	int32_t ofs;
+	uint64_t ofs;
 
 	/* search on 16-byte boundaries */
-	for (ofs = 0; ofs < length; ofs += 16) {
+	for (ofs = 0UL; ofs < length; ofs += 16UL) {
 		rsdp = (struct acpi_table_rsdp *)(base + ofs);
 
 		/* compare signature, validate checksum */
@@ -76,11 +77,27 @@ static struct acpi_table_rsdp *get_rsdp(void)
 			/* EBDA is addressed by the 16 bit pointer at 0x40E */
 			addr = (uint16_t *)hpa2hva(0x40eUL);
 
-			rsdp = found_rsdp((char *)hpa2hva((uint64_t)(*addr) << 4U), 0x400);
+			rsdp = found_rsdp((char *)hpa2hva((uint64_t)(*addr) << 4U), 0x400UL);
 		}
 		if (rsdp == NULL) {
 			/* Check the upper memory BIOS space, 0xe0000 - 0xfffff. */
-			rsdp = found_rsdp((char *)hpa2hva(0xe0000UL), 0x20000);
+			rsdp = found_rsdp((char *)hpa2hva(0xe0000UL), 0x20000UL);
+		}
+
+		if (rsdp == NULL) {
+			/* Check ACPI RECLAIM region, there might be multiple ACPI reclaimable regions. */
+			uint32_t i;
+			const struct e820_entry *entry = get_e820_entry();
+			uint32_t entries_count = get_e820_entries_count();
+
+			for (i = 0U; i < entries_count; i++) {
+				if (entry[i].type == E820_TYPE_ACPI_RECLAIM) {
+					rsdp = found_rsdp((char *)hpa2hva(entry[i].baseaddr), entry[i].length);
+					if (rsdp != NULL) {
+						break;
+					}
+				}
+			}
 		}
 
 		if (rsdp == NULL) {
@@ -159,7 +176,7 @@ void *get_acpi_tbl(const char *signature)
  * of Type 0
  */
 static uint16_t
-local_parse_madt(struct acpi_table_madt *madt, uint32_t lapic_id_array[CONFIG_MAX_PCPU_NUM])
+local_parse_madt(struct acpi_table_madt *madt, uint32_t lapic_id_array[MAX_PCPU_NUM])
 {
 	uint16_t pcpu_num = 0U;
 	struct acpi_madt_local_apic *processor;
@@ -181,7 +198,7 @@ local_parse_madt(struct acpi_table_madt *madt, uint32_t lapic_id_array[CONFIG_MA
 		if (entry->type == ACPI_MADT_TYPE_LOCAL_APIC) {
 			processor = (struct acpi_madt_local_apic *)iterator;
 			if ((processor->lapic_flags & ACPI_MADT_ENABLED) != 0U) {
-				if (pcpu_num < CONFIG_MAX_PCPU_NUM) {
+				if (pcpu_num < MAX_PCPU_NUM) {
 					lapic_id_array[pcpu_num] = processor->id;
 				}
 				pcpu_num++;
@@ -192,42 +209,8 @@ local_parse_madt(struct acpi_table_madt *madt, uint32_t lapic_id_array[CONFIG_MA
 	return pcpu_num;
 }
 
-static uint16_t
-ioapic_parse_madt(void *madt, struct ioapic_info *ioapic_id_array)
-{
-	struct acpi_madt_ioapic *ioapic;
-	struct acpi_table_madt *madt_ptr;
-	void *first, *end, *iterator;
-	struct acpi_subtable_header *entry;
-	uint16_t ioapic_idx = 0U;
-
-	madt_ptr = (struct acpi_table_madt *)madt;
-
-	first = madt_ptr + 1;
-	end = (void *)madt_ptr + madt_ptr->header.length;
-
-	for (iterator = first; (iterator) < (end); iterator += entry->length) {
-		entry = (struct acpi_subtable_header *)iterator;
-		if (entry->length < sizeof(struct acpi_subtable_header)) {
-			break;
-		}
-
-		if (entry->type == ACPI_MADT_TYPE_IOAPIC) {
-			ioapic = (struct acpi_madt_ioapic *)iterator;
-			if (ioapic_idx < CONFIG_MAX_IOAPIC_NUM) {
-				ioapic_id_array[ioapic_idx].id = ioapic->id;
-				ioapic_id_array[ioapic_idx].addr = ioapic->addr;
-				ioapic_id_array[ioapic_idx].gsi_base = ioapic->gsi_base;
-			}
-			ioapic_idx++;
-		}
-	}
-
-	return ioapic_idx;
-}
-
 /* The lapic_id info gotten from madt will be returned in lapic_id_array */
-uint16_t parse_madt(uint32_t lapic_id_array[CONFIG_MAX_PCPU_NUM])
+uint16_t parse_madt(uint32_t lapic_id_array[MAX_PCPU_NUM])
 {
 	uint16_t ret = 0U;
 	struct acpi_table_rsdp *rsdp = NULL;
@@ -244,19 +227,33 @@ uint16_t parse_madt(uint32_t lapic_id_array[CONFIG_MAX_PCPU_NUM])
 	return ret;
 }
 
-uint16_t parse_madt_ioapic(struct ioapic_info *ioapic_id_array)
+uint8_t parse_madt_ioapic(struct ioapic_info *ioapic_id_array)
 {
-	uint16_t ret = 0U;
-	struct acpi_table_rsdp *rsdp = NULL;
+	uint8_t ioapic_idx = 0U;
+	uint64_t entry, end;
+	const struct acpi_madt_ioapic *ioapic;
+	const struct acpi_table_madt *madt;
 
-	rsdp = get_rsdp();
-	if (rsdp != NULL) {
-		void *madt = get_acpi_tbl(ACPI_SIG_MADT);
+	if (get_rsdp() != NULL) {
+		madt = (const struct acpi_table_madt *)get_acpi_tbl(ACPI_SIG_MADT);
 
 		if (madt != NULL) {
-			ret = ioapic_parse_madt(madt, ioapic_id_array);
+			end = (uint64_t)madt + madt->header.length;
+
+			for (entry = (uint64_t)(madt + 1); entry < end; entry += ioapic->header.length) {
+				ioapic = (const struct acpi_madt_ioapic *)entry;
+
+				if (ioapic->header.type == ACPI_MADT_TYPE_IOAPIC) {
+					if (ioapic_idx < CONFIG_MAX_IOAPIC_NUM) {
+						ioapic_id_array[ioapic_idx].id = ioapic->id;
+						ioapic_id_array[ioapic_idx].addr = ioapic->addr;
+						ioapic_id_array[ioapic_idx].gsi_base = ioapic->gsi_base;
+					}
+					ioapic_idx++;
+				}
+			}
 		}
 	}
 
-	return ret;
+	return ioapic_idx;
 }

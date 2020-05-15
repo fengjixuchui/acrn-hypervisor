@@ -35,8 +35,11 @@ if "RELEASE" in os.environ:
 # ones.
 
 sys.path.insert(0, os.path.join(os.path.abspath('.'), 'extensions'))
-extensions = ['breathe', 'sphinx.ext.graphviz', 'sphinx.ext.extlinks',
-              'kerneldoc', 'eager_only', 'html_redirects']
+extensions = [
+   'breathe', 'sphinx.ext.graphviz', 'sphinx.ext.extlinks',
+   'kerneldoc', 'eager_only', 'html_redirects',
+   'sphinx_tabs.tabs'
+]
 
 # extlinks provides a macro template
 
@@ -72,7 +75,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'Project ACRN™'
-copyright = u'2019, Project ACRN'
+copyright = u'2020, Project ACRN'
 author = u'Project ARCN developers'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -81,15 +84,16 @@ author = u'Project ARCN developers'
 
 # The following code tries to extract the information by reading the
 # Makefile from the acrn-hypervisor repo by finding these lines:
-#   MAJOR_VERSION=0
-#   MINOR_VERSION=1
-#   RC_VERSION=1
+#   MAJOR_VERSION=1
+#   MINOR_VERSION=3
+#   EXTRA_VERSION=-unstable
 
 try:
     version_major = None
     version_minor = None
     version_rc = None
-    for line in open(os.path.normpath("../VERSION")) :
+
+    for line in open(os.path.realpath("../../../VERSION")) :
         # remove comments
         line = line.split('#', 1)[0]
         line = line.rstrip()
@@ -103,18 +107,14 @@ try:
               version_rc = val
            if version_major and version_minor and version_rc :
               break
-except:
-    pass
 finally:
     if version_major and version_minor :
-        version = release = "v " + version_major + '.' + version_minor
+        version = release = "v " + str(version_major) + '.' + str(version_minor)
         if version_rc :
           version = release = version + version_rc
     else:
         sys.stderr.write('Warning: Could not extract hypervisor version from VERSION file\n')
         version = release = "unknown"
-
-
 
 #
 # The short X.Y version.
@@ -189,10 +189,14 @@ else:
 html_context = {
    'current_version': current_version,
    'versions': ( ("latest", "/latest/"),
+                 ("1.6.1", "/1.6.1/"),
+                 ("1.6", "/1.6/"),
+                 ("1.5", "/1.5/"),
+                 ("1.4", "/1.4/"),
+                 ("1.3", "/1.3/"),
                  ("1.2", "/1.2/"),
                  ("1.1", "/1.1/"),
-                 ("1.0", "/1.0/"),
-                 ("0.8", "/0.8/"),
+                 ("1.0", "/1.0/"),   # keep 1.0
                )
     }
 
@@ -217,6 +221,8 @@ html_static_path = ['static']
 
 def setup(app):
    app.add_stylesheet("acrn-custom.css")
+   app.add_javascript("https://www.googletagmanager.com/gtag/js?id=UA-831873-64")
+   # note more GA tag manager calls are in acrn-custom.js
    app.add_javascript("acrn-custom.js")
 
 # Custom sidebar templates, must be a dictionary that maps document names

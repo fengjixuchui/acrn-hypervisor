@@ -18,6 +18,7 @@
 #include <vboot.h>
 #include <dump.h>
 #include <logmsg.h>
+#include <vmx.h>
 
 static spinlock_t exception_spinlock = { .head = 0U, .tail = 0U, };
 static spinlock_t irq_alloc_spinlock = { .head = 0U, .tail = 0U, };
@@ -34,10 +35,12 @@ struct static_mapping_table {
 };
 
 static struct static_mapping_table irq_static_mappings[NR_STATIC_MAPPINGS] = {
-	{TIMER_IRQ, VECTOR_TIMER},
-	{NOTIFY_IRQ, VECTOR_NOTIFY_VCPU},
-	{POSTED_INTR_NOTIFY_IRQ, VECTOR_POSTED_INTR},
-	{PMI_IRQ, VECTOR_PMI},
+	{TIMER_IRQ, TIMER_VECTOR},
+	{NOTIFY_VCPU_IRQ, NOTIFY_VCPU_VECTOR},
+	{PMI_IRQ, PMI_VECTOR},
+
+	/* To be initialized at runtime in init_irq_descs() */
+	[NR_STATIC_MAPPINGS_1 ... (NR_STATIC_MAPPINGS_1 + CONFIG_MAX_VM_NUM - 1U)] = {},
 };
 
 /*
@@ -81,7 +84,7 @@ static void free_irq_num(uint32_t irq)
 	uint64_t rflags;
 
 	if (irq < NR_IRQS) {
-		if (!ioapic_irq_is_gsi(irq)) {
+		if (!is_ioapic_irq(irq)) {
 			spinlock_irqsave_obtain(&irq_alloc_spinlock, &rflags);
 			(void)bitmap_test_and_clear_nolock((uint16_t)(irq & 0x3FU),
 						     irq_alloc_bitmap + (irq >> 6U));
@@ -219,7 +222,7 @@ int32_t request_irq(uint32_t req_irq, irq_action_t action_fn, void *priv_data,
 				spinlock_irqrestore_release(&desc->lock, rflags);
 
 				ret = (int32_t)irq;
-				dev_dbg(ACRN_DBG_IRQ, "[%s] irq%d vr:0x%x", __func__, irq, desc->vector);
+				dev_dbg(DBG_LEVEL_IRQ, "[%s] irq%d vr:0x%x", __func__, irq, desc->vector);
 			} else {
 				spinlock_irqrestore_release(&desc->lock, rflags);
 
@@ -240,7 +243,7 @@ void free_irq(uint32_t irq)
 
 	if (irq < NR_IRQS) {
 		desc = &irq_desc_array[irq];
-		dev_dbg(ACRN_DBG_IRQ, "[%s] irq%d vr:0x%x",
+		dev_dbg(DBG_LEVEL_IRQ, "[%s] irq%d vr:0x%x",
 			__func__, irq, irq_to_vector(irq));
 
 		free_irq_vector(irq);
@@ -300,7 +303,7 @@ static inline bool irq_need_mask(const struct irq_desc *desc)
 {
 	/* level triggered gsi should be masked */
 	return (((desc->flags & IRQF_LEVEL) != 0U)
-		&& ioapic_irq_is_gsi(desc->irq));
+		&& is_ioapic_irq(desc->irq));
 }
 
 static inline bool irq_need_unmask(const struct irq_desc *desc)
@@ -308,7 +311,7 @@ static inline bool irq_need_unmask(const struct irq_desc *desc)
 	/* level triggered gsi for non-ptdev should be unmasked */
 	return (((desc->flags & IRQF_LEVEL) != 0U)
 		&& ((desc->flags & IRQF_PT) == 0U)
-		&& ioapic_irq_is_gsi(desc->irq));
+		&& is_ioapic_irq(desc->irq));
 }
 
 static inline void handle_irq(const struct irq_desc *desc)
@@ -382,9 +385,57 @@ void dispatch_exception(struct intr_excp_ctx *ctx)
 	cpu_dead();
 }
 
+void handle_nmi(__unused struct intr_excp_ctx *ctx)
+{
+	uint32_t value32;
+
+	/*
+	 * There is a window where we may miss the current request in this
+	 * notification period when the work flow is as the following:
+	 *
+	 *       CPUx +                   + CPUr
+	 *            |                   |
+	 *            |                   +--+
+	 *            |                   |  | Handle pending req
+	 *            |                   <--+
+	 *            +--+                |
+	 *            |  | Set req flag   |
+	 *            <--+                |
+	 *            +------------------>---+
+	 *            |     Send NMI      |  | Handle NMI
+	 *            |                   <--+
+	 *            |                   |
+	 *            |                   |
+	 *            |                   +--> vCPU enter
+	 *            |                   |
+	 *            +                   +
+	 *
+	 * So, here we enable the NMI-window exiting to trigger the next vmexit
+	 * once there is no "virtual-NMI blocking" after vCPU enter into VMX non-root
+	 * mode. Then we can process the pending request on time.
+	 */
+	value32 = exec_vmread32(VMX_PROC_VM_EXEC_CONTROLS);
+	value32 |= VMX_PROCBASED_CTLS_NMI_WINEXIT;
+	exec_vmwrite32(VMX_PROC_VM_EXEC_CONTROLS, value32);
+}
+
 static void init_irq_descs(void)
 {
 	uint32_t i;
+
+	/*
+	 * Fill in #CONFIG_MAX_VM_NUM posted interrupt specific irq and vector pairs
+	 * at runtime
+	 */
+	for (i = 0U; i < CONFIG_MAX_VM_NUM; i++) {
+		uint32_t idx = i + NR_STATIC_MAPPINGS_1;
+
+		ASSERT(irq_static_mappings[idx].irq == 0U, "");
+		ASSERT(irq_static_mappings[idx].vector == 0U, "");
+
+		irq_static_mappings[idx].irq = POSTED_INTR_IRQ + i;
+		irq_static_mappings[idx].vector = POSTED_INTR_VECTOR + i;
+	}
 
 	for (i = 0U; i < NR_IRQS; i++) {
 		irq_desc_array[i].irq = i;
@@ -416,7 +467,7 @@ static void disable_pic_irqs(void)
 
 void init_default_irqs(uint16_t cpu_id)
 {
-	if (cpu_id == BOOT_CPU_ID) {
+	if (cpu_id == BSP_CPU_ID) {
 		init_irq_descs();
 
 		/* we use ioapic only, disable legacy PIC */
@@ -429,16 +480,16 @@ void init_default_irqs(uint16_t cpu_id)
 static inline void fixup_idt(const struct host_idt_descriptor *idtd)
 {
 	uint32_t i;
-	union idt_64_descriptor *idt_desc = (union idt_64_descriptor *)idtd->idt;
+	struct idt_64_descriptor *idt_desc = idtd->idt->host_idt_descriptors;
 	uint32_t entry_hi_32, entry_lo_32;
 
 	for (i = 0U; i < HOST_IDT_ENTRIES; i++) {
-		entry_lo_32 = idt_desc[i].fields.offset_63_32;
-		entry_hi_32 = idt_desc[i].fields.rsvd;
-		idt_desc[i].fields.rsvd = 0U;
-		idt_desc[i].fields.offset_63_32 = entry_hi_32;
-		idt_desc[i].fields.high32.bits.offset_31_16 = entry_lo_32 >> 16U;
-		idt_desc[i].fields.low32.bits.offset_15_0 = entry_lo_32 & 0xffffUL;
+		entry_lo_32 = idt_desc[i].offset_63_32;
+		entry_hi_32 = idt_desc[i].rsvd;
+		idt_desc[i].rsvd = 0U;
+		idt_desc[i].offset_63_32 = entry_hi_32;
+		idt_desc[i].high32.bits.offset_31_16 = entry_lo_32 >> 16U;
+		idt_desc[i].low32.bits.offset_15_0 = entry_lo_32 & 0xffffUL;
 	}
 }
 
@@ -453,7 +504,7 @@ void init_interrupt(uint16_t pcpu_id)
 {
 	struct host_idt_descriptor *idtd = &HOST_IDTR;
 
-	if (pcpu_id == BOOT_CPU_ID) {
+	if (pcpu_id == BSP_CPU_ID) {
 		fixup_idt(idtd);
 	}
 	set_idt(idtd);

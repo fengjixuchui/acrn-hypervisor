@@ -9,22 +9,33 @@
 #include <types.h>
 #include <e820.h>
 #include <cpu.h>
+#include <boot.h>
 #include <direct_boot.h>
+#include <mmu.h>
+
+/* AP trampoline code buffer base address. */
+static uint64_t ap_trampoline_buf;
 
 static void init_direct_boot(void)
 {
-	/* nothing to do for now */
+	ap_trampoline_buf = e820_alloc_memory(CONFIG_LOW_RAM_SIZE, MEM_1M);
 }
 
 /* @post: return != 0UL */
 static uint64_t get_direct_boot_ap_trampoline(void)
 {
-	return e820_alloc_low_memory(CONFIG_LOW_RAM_SIZE);
+	return ap_trampoline_buf;
 }
 
 static void* get_direct_boot_rsdp(void)
 {
+#ifdef CONFIG_MULTIBOOT2
+	struct acrn_multiboot_info *mbi = get_multiboot_info();
+
+	return mbi->mi_acpi_rsdp;
+#else
 	return NULL;
+#endif
 }
 
 static void init_direct_boot_irq(void)

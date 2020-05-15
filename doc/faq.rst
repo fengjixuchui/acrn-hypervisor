@@ -31,8 +31,10 @@ fails to boot, here are some options to try:
     not checked in the "Boot Options"
 * Make sure you are using EFI (and not legacy BIOS)
 
-How do I configure ACRN's memory use?
-*************************************
+.. _config_32GB_memory:
+
+How do I configure ACRN's memory size?
+**************************************
 
 It's important that the ACRN Kconfig settings are aligned with the physical memory
 on your platform. Check the documentation for these option settings for
@@ -43,52 +45,47 @@ details:
 * :option:`CONFIG_UOS_RAM_SIZE`
 * :option:`CONFIG_HV_RAM_SIZE`
 
-For example, if memory is 32G, setup ``PLATFORM_RAM_SIZE`` = 32G
+For example, if the NUC's physical memory size is 32G, you may follow these steps
+to make the new uefi ACRN hypervisor, and then deploy it onto the NUC board to boot
+ACRN Service VM with the 32G memory size.
 
-::
+#. Use ``make menuconfig`` to change the ``RAM_SIZE``::
 
-  config PLATFORM_RAM_SIZE
-        hex "Size of the physical platform RAM"
-        default 0x200000000 if PLATFORM_SBL
-        default 0x800000000 if PLATFORM_UEFI
+   $ cd acrn-hypervisor
+   $ make menuconfig -C hypervisor BOARD=nuc7i7dnb
 
-Setup ``SOS_RAM_SIZE`` = 32G too (The SOS will have the whole resource)
+#. Navigate to these items and then change the value as given below::
 
-::
+   (0x0f000000) Size of the RAM region used by the hypervisor
+   (0x800000000) Size of the physical platform RAM
+   (0x800000000) Size of the Service OS (SOS) RAM
 
-  config SOS_RAM_SIZE
-        hex "Size of the Service OS (SOS) RAM"
-        default 0x200000000 if PLATFORM_SBL
-        default 0x800000000 if PLATFORM_UEFI
+#. Press :kbd:`S` and then :kbd:`Enter` to save the ``.config`` to the default directory:
+   ``acrn-hypervisor/hypervisor/build/.config``
 
-Setup ``UOS_RAM_SIZE`` to what you need, for example,  16G
+#. Press :kbd:`ESC` to leave the menu.
 
-::
+#. Use these command lines to build the new efi image for KBL NUC::
 
-  config UOS_RAM_SIZE
-        hex "Size of the User OS (UOS) RAM"
-        default 0x100000000 if PLATFORM_SBL
-        default 0x400000000 if PLATFORM_UEFI
+   $ make -C hypervisor
+   $ make -C misc/efi-stub HV_OBJDIR=$PWD/hypervisor/build EFI_OBJDIR=$PWD/hypervisor/build
 
-Setup ``HV_RAM_SIZE`` (we will reserve memory for guest EPT paging
-table), if you setup 32G (default 16G), you must enlarge it with
-(32G-16G)/2M pages (where pages are 4K). The example below is after
-HV_RAM_SIZE is changed to 240M
+#. Log in to your KBL NUC (assumes all the ACRN configurations are set up), then copy
+   the new efi image into the EFI partition::
 
-::
+   # mount /dev/sda1 /mnt
+   # scp -r <user name>@<host address>:<your workspace>/acrn-hypervisor/hypervisor/build/acrn.efi /mnt/EFI/acrn/
+   # sync && umount /mnt
 
-  config HV_RAM_SIZE
-    hex "Size of the RAM region used by the hypervisor"
-    default 0x07800000 if PLATFORM_SBL
-    default 0x0f000000 if PLATFORM_UEFI
+#. Reboot KBL NUC to enjoy the ACRN with 32G memory.
 
-How to modify the default display output for a UOS?
-***************************************************
+How to modify the default display output for a User VM?
+*******************************************************
 
 Apollo Lake HW has three pipes and each pipe can have three or four planes which
 help to display the overlay video. The hardware can support up to 3 monitors
 simultaneously. Some parameters are available to control how display monitors
-are assigned between the SOS and UOS(s), simplifying the assignment policy and
+are assigned between the Service VM and User VM(s), simplifying the assignment policy and
 providing configuration flexibility for the pipes and planes for various IoT
 scenarios. This is known as the **plane restriction** feature.
 
@@ -99,33 +96,33 @@ scenarios. This is known as the **plane restriction** feature.
 
 Refer to :ref:`GVT-g-kernel-options` for detailed parameter descriptions.
 
-In the default configuration, pipe A is assigned to the SOS and pipes B and C
-are assigned to the UOS, as described by these parameters:
+In the default configuration, pipe A is assigned to the Service VM and pipes B and C
+are assigned to the User VM, as described by these parameters:
 
-* SOS::
+* Service VM::
 
     i915.avail_planes_per_pipe=0x01010F
     i915.domain_plane_owners=0x011111110000
 
-* UOS::
+* User VM::
 
     i915.avail_planes_per_pipe=0x0070F00
 
-To assign pipes A and B to the UOS, while pipe C is assigned to the SOS, use
+To assign pipes A and B to the User VM, while pipe C is assigned to the Service VM, use
 these parameters:
 
-* SOS::
+* Service VM::
 
     i915.avail_planes_per_pipe=0x070101
     i915.domain_plane_owners=0x000011111111
 
-* UOS::
+* User VM::
 
     i915.avail_planes_per_pipe=0x000F0F
 
 .. note::
 
-   The careful reader may have noticed that in all examples given above, the SOS
+   The careful reader may have noticed that in all examples given above, the Service VM
    always has at least one plane per pipe. This is intentional, and the driver
    will enforce this if the parameters do not do this.
 
@@ -153,7 +150,7 @@ How to build ACRN on Fedora 29?
 There is a known issue when attempting to build ACRN on Fedora 29
 because of how ``gnu-efi`` is packaged in this Fedora release.
 (See the `ACRN GitHub issue
-<https://github.com/projectacrn/acrn-hypervisor/issues/2457>`_ 
+<https://github.com/projectacrn/acrn-hypervisor/issues/2457>`_
 for more information.)  The following patch to ``/efi-stub/Makefile``
 fixes the problem on Fedora 29 development systems (but should
 not be used on other Linux distros)::

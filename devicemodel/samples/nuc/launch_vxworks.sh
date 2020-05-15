@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2019 Intel Corporation.
+# SPDX-License-Identifier: BSD-3-Clause
 
 function launch_vxworks()
 {
@@ -21,11 +23,11 @@ mem_size=2048M
 #      offically now and we are working on upstream the front-end drivers.
 #      OVMF console is not available with default parameters.
 
-acrn-dm -A -m $mem_size -c $2 -s 0:0,hostbridge \
+acrn-dm -A -m $mem_size -s 0:0,hostbridge \
   -s 5,virtio-console,@stdio:stdio_port \
   -s 3,virtio-blk,./VxWorks.img \
   --virtio_poll 1000000 \
-  --ovmf ./OVMF.fd \
+  --ovmf /usr/share/acrn/bios/OVMF.fd \
   --lapic_pt \
   $vm_name
 }
@@ -47,4 +49,4 @@ for i in `ls -d /sys/devices/system/cpu/cpu[1-99]`; do
         fi
 done
 
-launch_vxworks 1 1
+launch_vxworks 1

@@ -11,6 +11,7 @@
 #include <logmsg.h>
 #include <platform_acpi_info.h>
 #include <guest_pm.h>
+#include <per_cpu.h>
 
 int32_t validate_pstate(const struct acrn_vm *vm, uint64_t perf_ctl)
 {
@@ -103,7 +104,7 @@ static inline void init_cx_port(struct acrn_vm *vm)
 	}
 }
 
-void vm_setup_cpu_state(struct acrn_vm *vm)
+static void vm_setup_cpu_state(struct acrn_vm *vm)
 {
 	vm_setup_cpu_px(vm);
 	vm_setup_cpu_cx(vm);
@@ -113,7 +114,7 @@ void vm_setup_cpu_state(struct acrn_vm *vm)
 /* This function is for power management Sx state implementation,
  * VM need to load the Sx state data to implement S3/S5.
  */
-int32_t vm_load_pm_s_state(struct acrn_vm *vm)
+static int32_t vm_load_pm_s_state(struct acrn_vm *vm)
 {
 	int32_t ret;
 	struct pm_s_state_data *sx_data = get_host_sstate_data();
@@ -130,9 +131,9 @@ int32_t vm_load_pm_s_state(struct acrn_vm *vm)
 	return ret;
 }
 
-static inline uint32_t s3_enabled(uint32_t pm1_cnt)
+static inline bool is_s3_enabled(uint32_t pm1_cnt)
 {
-	return pm1_cnt & (1U << BIT_SLP_EN);
+	return ((pm1_cnt & (1U << BIT_SLP_EN)) != 0U);
 }
 
 static inline uint8_t get_slp_typx(uint32_t pm1_cnt)
@@ -147,6 +148,20 @@ static bool pm1ab_io_read(struct acrn_vcpu *vcpu, uint16_t addr, size_t width)
 	pio_req->value = pio_read(addr, width);
 
 	return true;
+}
+
+static inline void enter_s5(struct acrn_vm *vm, uint32_t pm1a_cnt_val, uint32_t pm1b_cnt_val)
+{
+	/*
+	 * It's possible that ACRN come here from SOS and pre-launched VM. Currently, we
+	 * assume SOS has full ACPI power management stack. That means the value from SOS
+	 * should be saved and used to shutdown the system.
+	 */
+	if (is_sos_vm(vm)) {
+		save_s5_reg_val(pm1a_cnt_val, pm1b_cnt_val);
+	}
+	pause_vm(vm);
+	(void)shutdown_vm(vm);
 }
 
 static inline void enter_s3(struct acrn_vm *vm, uint32_t pm1a_cnt_val, uint32_t pm1b_cnt_val)
@@ -179,24 +194,30 @@ static bool pm1ab_io_write(struct acrn_vcpu *vcpu, uint16_t addr, size_t width, 
 	if (width == 2U) {
 		uint8_t val = get_slp_typx(v);
 
-		if ((addr == vm->pm.sx_state_data->pm1a_cnt.address)
-			&& (val == vm->pm.sx_state_data->s3_pkg.val_pm1a) && (s3_enabled(v) != 0U)) {
+		if ((addr == vm->pm.sx_state_data->pm1a_cnt.address) && is_s3_enabled(v)) {
 
 			if (vm->pm.sx_state_data->pm1b_cnt.address != 0UL) {
 				pm1a_cnt_ready = v;
 			} else {
-				enter_s3(vm, v, 0U);
+				if (vm->pm.sx_state_data->s3_pkg.val_pm1a == val) {
+					enter_s3(vm, v, 0U);
+				} else if (vm->pm.sx_state_data->s5_pkg.val_pm1a == val) {
+					enter_s5(vm, v, 0U);
+				}
 			}
 
 			to_write = false;
-
-		} else if ((addr == vm->pm.sx_state_data->pm1b_cnt.address)
-			&& (val == vm->pm.sx_state_data->s3_pkg.val_pm1b) && (s3_enabled(v) != 0U)) {
+		} else if ((addr == vm->pm.sx_state_data->pm1b_cnt.address) && is_s3_enabled(v)) {
 
 			if (pm1a_cnt_ready != 0U) {
 				pm1a_cnt_val = pm1a_cnt_ready;
 				pm1a_cnt_ready = 0U;
-				enter_s3(vm, pm1a_cnt_val, v);
+
+				if (vm->pm.sx_state_data->s3_pkg.val_pm1b == val) {
+					enter_s3(vm, pm1a_cnt_val, v);
+				} else if (vm->pm.sx_state_data->s5_pkg.val_pm1b == val) {
+					enter_s5(vm, pm1a_cnt_val, v);
+				}
 			} else {
 				/* the case broke ACPI spec */
 				pr_err("PM1B_CNT write error!");
@@ -231,7 +252,7 @@ static void register_gas_io_handler(struct acrn_vm *vm, uint32_t pio_idx, const 
 	}
 }
 
-void register_pm1ab_handler(struct acrn_vm *vm)
+static void register_pm1ab_handler(struct acrn_vm *vm)
 {
 	struct pm_s_state_data *sx_data = vm->pm.sx_state_data;
 
@@ -261,14 +282,14 @@ static bool rt_vm_pm1a_io_write(struct acrn_vcpu *vcpu, uint16_t addr, size_t wi
 		pr_dbg("Invalid address (0x%x) or width (0x%x)", addr, width);
 	} else {
 		if ((((v & VIRTUAL_PM1A_SLP_EN) != 0U) && (((v & VIRTUAL_PM1A_SLP_TYP) >> 10U) == 5U)) != 0U) {
-			vcpu->vm->state = VM_POWERING_OFF;
+			vcpu->vm->state = VM_READY_TO_POWEROFF;
 		}
 	}
 
 	return false;
 }
 
-void register_rt_vm_pm1a_ctl_handler(struct acrn_vm *vm)
+static void register_rt_vm_pm1a_ctl_handler(struct acrn_vm *vm)
 {
 	struct vm_io_range io_range;
 
@@ -277,4 +298,21 @@ void register_rt_vm_pm1a_ctl_handler(struct acrn_vm *vm)
 
 	register_pio_emulation_handler(vm, VIRTUAL_PM1A_CNT_PIO_IDX, &io_range,
 					&rt_vm_pm1a_io_read, &rt_vm_pm1a_io_write);
+}
+
+void init_guest_pm(struct acrn_vm *vm)
+{
+	vm_setup_cpu_state(vm);
+
+	if (is_sos_vm(vm)) {
+		/* Load pm S state data */
+		if (vm_load_pm_s_state(vm) == 0) {
+			register_pm1ab_handler(vm);
+		}
+	}
+
+	/* Intercept the virtual pm port for RTVM */
+	if (is_rt_vm(vm)) {
+		register_rt_vm_pm1a_ctl_handler(vm);
+	}
 }

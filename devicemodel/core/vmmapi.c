@@ -60,6 +60,22 @@
 #define SUPPORT_VHM_API_VERSION_MAJOR	1
 #define SUPPORT_VHM_API_VERSION_MINOR	0
 
+#define VM_STATE_STR_LEN                16
+static const char vm_state_str[VM_SUSPEND_LAST][VM_STATE_STR_LEN] = {
+	[VM_SUSPEND_NONE]		= "RUNNING",
+	[VM_SUSPEND_SYSTEM_RESET]	= "SYSTEM_RESET",
+	[VM_SUSPEND_FULL_RESET]		= "FULL_RESET",
+	[VM_SUSPEND_POWEROFF]		= "POWEROFF",
+	[VM_SUSPEND_SUSPEND]		= "SUSPEND",
+	[VM_SUSPEND_HALT]		= "HALT",
+	[VM_SUSPEND_TRIPLEFAULT]	= "TRIPLEFAULT"
+};
+
+const char *vm_state_to_str(enum vm_suspend_how idx)
+{
+	return (idx < VM_SUSPEND_LAST) ? vm_state_str[idx] : "UNKNOWN";
+}
+
 static int
 check_api(int fd)
 {
@@ -85,9 +101,85 @@ check_api(int fd)
 }
 
 static int devfd = -1;
+static uint64_t cpu_affinity_bitmap = 0UL;
+
+static void add_one_pcpu(int pcpu_id)
+{
+	if (cpu_affinity_bitmap & (1UL << pcpu_id)) {
+		pr_err("%s: pcpu_id %d has been allocated to this VM.\n", __func__, pcpu_id);
+		return;
+	}
+
+	cpu_affinity_bitmap |= (1UL << pcpu_id);
+}
+
+/*
+ * example options:
+ *   --cpu_affinity 1,2,3
+ *   --cpu_affinity 1-3
+ *   --cpu_affinity 1,3,4-6
+ *   --cpu_affinity 1,3,4-6,9
+ */
+int acrn_parse_cpu_affinity(char *opt)
+{
+	char *str, *cp;
+	int pcpu_id;
+	int pcpu_start, pcpu_end;
+
+	cp = strdup(opt);
+	if (!cp) {
+		pr_err("%s: strdup returns NULL\n", __func__);
+		return -1;
+	}
+
+	while (cp) {
+		str = strpbrk(cp, ",-");
+
+		/* no more entries delimited by ',' or '-' */
+		if (!str) {
+			if (!dm_strtoi(cp, NULL, 10, &pcpu_id)) {
+				add_one_pcpu(pcpu_id);
+				break;
+			}
+		}
+
+		if (*str == ',') {
+			/* after this, 'cp' points to the character after ',' */
+			str = strsep(&cp, ",");
+
+			/* parse the entry before ',' */
+			if (dm_strtoi(str, NULL, 10, &pcpu_id)) {
+				return -1;
+			}
+			add_one_pcpu(pcpu_id);
+		}
+
+		if (*str == '-') {
+			str = strsep(&cp, "-");
+
+			/* parse the entry before and after '-' respectively */
+			if (dm_strtoi(str, NULL, 10, &pcpu_start) || dm_strtoi(cp, NULL, 10, &pcpu_end)) {
+				return -1;
+			}
+
+			if (pcpu_end <= pcpu_start) {
+				return -1;
+			}
+
+			for (; pcpu_start <= pcpu_end; pcpu_start++) {
+				add_one_pcpu(pcpu_start);
+			}
+
+			/* skip the ',' after pcpu_end */
+			str = strsep(&cp, ",");
+		}
+	}
+
+	return 0;
+}
 
 struct vmctx *
-vm_create(const char *name, uint64_t req_buf)
+vm_create(const char *name, uint64_t req_buf, int *vcpu_num)
 {
 	struct vmctx *ctx;
 	struct acrn_create_vm create_vm;
@@ -128,6 +220,7 @@ vm_create(const char *name, uint64_t req_buf)
 	/* Pass uuid as parameter of create vm*/
 	uuid_copy(create_vm.uuid, vm_uuid);
 
+	ctx->gvt_enabled = false;
 	ctx->fd = devfd;
 	ctx->lowmem_limit = 2 * GB;
 	ctx->highmem_gpa_base = PCI_EMUL_MEMLIMIT64;
@@ -149,6 +242,9 @@ vm_create(const char *name, uint64_t req_buf)
 		create_vm.vm_flag &= (~GUEST_FLAG_IO_COMPLETION_POLLING);
 	}
 
+	/* command line arguments specified CPU affinity could overwrite HV's static configuration */
+	create_vm.cpu_affinity = cpu_affinity_bitmap;
+
 	if (is_rtvm) {
 		create_vm.vm_flag |= GUEST_FLAG_RT;
 		create_vm.vm_flag |= GUEST_FLAG_IO_COMPLETION_POLLING;
@@ -168,6 +264,7 @@ vm_create(const char *name, uint64_t req_buf)
 		goto err;
 	}
 
+	*vcpu_num = create_vm.vcpu_num;
 	ctx->vmid = create_vm.vmid;
 
 	return ctx;
@@ -328,11 +425,17 @@ vm_unsetup_memory(struct vmctx *ctx)
 	 * allocated the new UOS, the previous UOS sensitive data
 	 * may be leaked to the new UOS if the memory is not cleared.
 	 *
+	 * For rtvm, we can't clean VM's memory as RTVM may still
+	 * run. But we need to return the memory to SOS here.
+	 * Otherwise, VM can't be restart again.
 	 */
-	bzero((void *)ctx->baseaddr, ctx->lowmem);
-	if (ctx->highmem > 0) {
-		bzero((void *)(ctx->baseaddr + ctx->highmem_gpa_base),
-			ctx->highmem);
+
+	if (!is_rtvm) {
+		bzero((void *)ctx->baseaddr, ctx->lowmem);
+		if (ctx->highmem > 0) {
+			bzero((void *)(ctx->baseaddr + ctx->highmem_gpa_base),
+					ctx->highmem);
+		}
 	}
 
 	hugetlb_unsetup_memory(ctx);
@@ -407,12 +510,12 @@ vm_clear_ioreq(struct vmctx *ctx)
 	ioctl(ctx->fd, IC_CLEAR_VM_IOREQ, NULL);
 }
 
-static int suspend_mode = VM_SUSPEND_NONE;
+static enum vm_suspend_how suspend_mode = VM_SUSPEND_NONE;
 
 void
 vm_set_suspend_mode(enum vm_suspend_how how)
 {
-	pr_notice("vm mode changed from %d to %d\n", suspend_mode, how);
+	pr_notice("VM state changed from[ %s ] to [ %s ]\n", vm_state_to_str(suspend_mode), vm_state_to_str(how));
 	suspend_mode = how;
 }
 
@@ -425,6 +528,7 @@ vm_get_suspend_mode(void)
 int
 vm_suspend(struct vmctx *ctx, enum vm_suspend_how how)
 {
+	pr_info("%s: setting VM state to %s\n", __func__, vm_state_to_str(how));
 	vm_set_suspend_mode(how);
 	mevent_notify();
 
@@ -456,25 +560,15 @@ vm_set_gsi_irq(struct vmctx *ctx, int gsi, uint32_t operation)
 }
 
 int
-vm_assign_ptdev(struct vmctx *ctx, int bus, int slot, int func)
+vm_assign_pcidev(struct vmctx *ctx, struct acrn_assign_pcidev *pcidev)
 {
-	uint16_t bdf;
-
-	bdf = ((bus & 0xff) << 8) | ((slot & 0x1f) << 3) |
-			(func & 0x7);
-
-	return ioctl(ctx->fd, IC_ASSIGN_PTDEV, &bdf);
+	return ioctl(ctx->fd, IC_ASSIGN_PCIDEV, pcidev);
 }
 
 int
-vm_unassign_ptdev(struct vmctx *ctx, int bus, int slot, int func)
+vm_deassign_pcidev(struct vmctx *ctx, struct acrn_assign_pcidev *pcidev)
 {
-	uint16_t bdf;
-
-	bdf = ((bus & 0xff) << 8) | ((slot & 0x1f) << 3) |
-			(func & 0x7);
-
-	return ioctl(ctx->fd, IC_DEASSIGN_PTDEV, &bdf);
+	return ioctl(ctx->fd, IC_DEASSIGN_PCIDEV, pcidev);
 }
 
 int
@@ -507,30 +601,6 @@ vm_unmap_ptdev_mmio(struct vmctx *ctx, int bus, int slot, int func,
 	memmap.prot = PROT_ALL;
 
 	return ioctl(ctx->fd, IC_UNSET_MEMSEG, &memmap);
-}
-
-int
-vm_set_ptdev_msix_info(struct vmctx *ctx, struct ic_ptdev_irq *ptirq)
-{
-	if (!ptirq)
-		return -1;
-
-	return ioctl(ctx->fd, IC_SET_PTDEV_INTR_INFO, ptirq);
-}
-
-int
-vm_reset_ptdev_msix_info(struct vmctx *ctx, uint16_t virt_bdf, uint16_t phys_bdf,
-			 int vector_count)
-{
-	struct ic_ptdev_irq ptirq;
-
-	bzero(&ptirq, sizeof(ptirq));
-	ptirq.type = IRQ_MSIX;
-	ptirq.virt_bdf = virt_bdf;
-	ptirq.phys_bdf = phys_bdf;
-	ptirq.msix.vector_cnt = vector_count;
-
-	return ioctl(ctx->fd, IC_RESET_PTDEV_INTR_INFO, &ptirq);
 }
 
 int

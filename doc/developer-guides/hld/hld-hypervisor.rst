@@ -8,6 +8,7 @@ Hypervisor high-level design
    :maxdepth: 1
 
    hv-startup
+   hv-vm-management
    hv-cpu-virt
    Memory management <hv-memmgt>
    I/O Emulation <hv-io-emulation>
@@ -22,3 +23,5 @@ Hypervisor high-level design
    Console, Shell, and vUART <hv-console>
    Hypercall / VHM upcall <hv-hypercall>
    Compile-time configuration <hv-config>
+   RDT support <hv-rdt>
+   Split-locked Access handling <hld-splitlock>

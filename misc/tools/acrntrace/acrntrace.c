@@ -19,6 +19,7 @@
 #include <pthread.h>
 #include <string.h>
 #include <signal.h>
+#include <numa.h>
 
 #include "acrntrace.h"
 
@@ -29,14 +30,16 @@ static int exiting = 0;
 
 /* for opt */
 static uint64_t period = 10000;
-static const char optString[] = "i:hct:";
+static const char optString[] = "i:hcrt:a:";
 static const char dev_prefix[] = "acrn_trace_";
 
-static uint32_t flags;
+static uint32_t flags = FLAG_CLEAR_BUF;
 static char trace_file_dir[TRACE_FILE_DIR_LEN];
 
 static reader_struct *reader;
 static int dev_cnt = 0; /* Count of /dev/acrn_trace_xxx devices */
+
+static struct bitmask *cpu_bitmask = NULL;
 
 static void display_usage(void)
 {
@@ -46,7 +49,9 @@ static void display_usage(void)
 	       "\t-h: print this message\n"
 	       "\t-i: period_in_ms: specify polling interval [1-999]\n"
 	       "\t-t: max time to capture trace data (in second)\n"
-	       "\t-c: clear the buffered old data\n");
+	       "\t-c: clear the buffered old data (deprecated)\n"
+	       "\t-r: capture the buffered old data instead of clearing it\n"
+	       "\t-a: cpu-set: only capture the trace data on these configured cpu-set\n");
 }
 
 static void timer_handler(union sigval sv)
@@ -113,8 +118,17 @@ static int parse_opt(int argc, char *argv[])
 			timeout = ret;
 			pr_dbg("Capture trace data for at most %ds\n", ret);
 			break;
+		/*
+		 * We have set the FLAG_CLEAR_BUF by default.
+		 * Here we just keep the -c for backward compatibility.
+		 */
 		case 'c':
-			flags |= FLAG_CLEAR_BUF;
+			break;
+		case 'r':
+			flags &= ~FLAG_CLEAR_BUF;
+			break;
+		case 'a':
+			cpu_bitmask = numa_parse_cpustring_all(optarg);
 			break;
 		case 'h':
 			display_usage();
@@ -316,8 +330,10 @@ static void handle_on_exit(void)
 
 	pr_info("exiting - to release resources...\n");
 
-	foreach_dev(dev_id)
-	    destory_reader(&reader[dev_id]);
+	foreach_dev(dev_id) {
+		if (numa_bitmask_isbitset(cpu_bitmask, dev_id))
+			destory_reader(&reader[dev_id]);
+	}
 }
 
 static void signal_exit_handler(int sig)
@@ -339,6 +355,14 @@ int main(int argc, char *argv[])
 	if (dev_cnt == 0) {
 		pr_err("Failed to find acrn trace devices, please check whether module acrn_trace is inserted\n");
 		exit(EXIT_FAILURE);
+	}
+
+	/* if we don't set the -a option or set it by mistake, capture the trace on all possible dev */
+	if (!cpu_bitmask) {
+		/* numa_bitmask_alloc will cause the process exiting on failure */
+		cpu_bitmask = numa_bitmask_alloc(dev_cnt);
+		foreach_dev(dev_id)
+			numa_bitmask_setbit(cpu_bitmask, dev_id);
 	}
 
 	reader = calloc(1, sizeof(reader_struct) * dev_cnt);
@@ -366,9 +390,11 @@ int main(int argc, char *argv[])
 
 	/* acquair res for each trace dev */
 	flags |= FLAG_TO_REL;
-	foreach_dev(dev_id)
-	    if (create_reader(&reader[dev_id], dev_id) < 0)
-		goto out_free;
+	foreach_dev(dev_id) {
+		if (numa_bitmask_isbitset(cpu_bitmask, dev_id))
+			if (create_reader(&reader[dev_id], dev_id) < 0)
+				goto out_free;
+	}
 
 	/* for kill exit handling */
 	signal(SIGTERM, signal_exit_handler);
@@ -380,8 +406,10 @@ int main(int argc, char *argv[])
 		printf("q <enter> to quit:\n");
 
  out_free:
-	foreach_dev(dev_id)
-	    destory_reader(&reader[dev_id]);
+	foreach_dev(dev_id) {
+		if (numa_bitmask_isbitset(cpu_bitmask, dev_id))
+			destory_reader(&reader[dev_id]);
+	}
 
 	free(reader);
 	flags &= ~FLAG_TO_REL;

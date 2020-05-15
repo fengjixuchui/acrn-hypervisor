@@ -17,6 +17,7 @@
 #include <vtd.h>
 #include <vmexit.h>
 #include <pgtable.h>
+#include <cpufeatures.h>
 #include <trace.h>
 #include <logmsg.h>
 
@@ -26,7 +27,7 @@
 			   CR0_NE |  CR0_ET | CR0_TS | CR0_EM | CR0_MP | CR0_PE)
 
 /* CR4 bits hv want to trap to track status change */
-#define CR4_TRAP_MASK (CR4_PSE | CR4_PAE | CR4_VMXE | CR4_PCIDE | CR4_SMEP | CR4_SMAP | CR4_PKE)
+#define CR4_TRAP_MASK (CR4_PSE | CR4_PAE | CR4_VMXE | CR4_SMEP | CR4_SMAP | CR4_PKE)
 #define	CR4_RESERVED_MASK ~(CR4_VME | CR4_PVI | CR4_TSD | CR4_DE | CR4_PSE | \
 				CR4_PAE | CR4_MCE | CR4_PGE | CR4_PCE |     \
 				CR4_OSFXSR | CR4_PCIDE | CR4_OSXSAVE |       \
@@ -111,6 +112,14 @@ static bool is_cr0_write_valid(struct acrn_vcpu *vcpu, uint64_t cr0)
 				 * is invalid
 				 */
 				if (((cr0 & CR0_CD) == 0UL) && ((cr0 & CR0_NW) != 0UL)) {
+					ret = false;
+				}
+				/* SDM 4.10.1 "Process-Context Identifiers"
+				 *
+				 * MOV to CR0 causes a general-protection exception if it would
+				 * clear CR0.PG to 0 while CR4.PCIDE = 1
+				 */
+				if (((cr0 & CR0_PG) == 0UL) && ((vcpu_get_cr4(vcpu) & CR4_PCIDE) != 0UL)) {
 					ret = false;
 				}
 			}
@@ -206,9 +215,7 @@ static void vmx_write_cr0(struct acrn_vcpu *vcpu, uint64_t cr0)
 						 * disabled behavior
 						 */
 						exec_vmwrite64(VMX_GUEST_IA32_PAT_FULL, PAT_ALL_UC_VALUE);
-						if (!iommu_snoop_supported(vcpu->vm->iommu)) {
-							cache_flush_invalidate_all();
-						}
+						cache_flush_invalidate_all();
 					} else {
 						/* Restore IA32_PAT to enable cache again */
 						exec_vmwrite64(VMX_GUEST_IA32_PAT_FULL,
@@ -235,7 +242,7 @@ static void vmx_write_cr0(struct acrn_vcpu *vcpu, uint64_t cr0)
 			/* clear read cache, next time read should from VMCS */
 			bitmap_clear_lock(CPU_REG_CR0, &vcpu->reg_cached);
 
-			pr_dbg("VMM: Try to write %016llx, allow to write 0x%016llx to CR0", cr0_mask, cr0_vmx);
+			pr_dbg("VMM: Try to write %016lx, allow to write 0x%016lx to CR0", cr0_mask, cr0_vmx);
 		}
 	}
 }
@@ -252,14 +259,9 @@ static bool is_cr4_write_valid(struct acrn_vcpu *vcpu, uint64_t cr4)
 		if (((cr4 & CR4_VMXE) != 0UL) || ((cr4 & CR4_SMXE) != 0UL)) {
 			ret = false;
 		} else {
-			/* Do NOT support PCID in guest */
-			if ((cr4 & CR4_PCIDE) != 0UL) {
-				ret = false;
-			} else {
-				if (is_long_mode(vcpu)) {
-					if ((cr4 & CR4_PAE) == 0UL) {
-						ret = false;
-					}
+			if (is_long_mode(vcpu)) {
+				if ((cr4 & CR4_PAE) == 0UL) {
+					ret = false;
 				}
 			}
 		}
@@ -294,7 +296,7 @@ static bool is_cr4_write_valid(struct acrn_vcpu *vcpu, uint64_t cr4)
  *   - OSXMMEXCPT (10) Flexible to guest
  *   - VMXE (13) Trapped to hide from guest
  *   - SMXE (14) must always be 0 => must lead to a VM exit
- *   - PCIDE (17) Trapped to hide from guest
+ *   - PCIDE (17) Flexible tol guest
  *   - OSXSAVE (18) Flexible to guest
  *   - XSAVE (19) Flexible to guest
  *         We always keep align with physical cpu. So it's flexible to
@@ -326,6 +328,30 @@ static void vmx_write_cr4(struct acrn_vcpu *vcpu, uint64_t cr4)
 			}
 		}
 
+		if ((err_found == false) && (((cr4 ^ old_cr4) & CR4_PCIDE) != 0UL)) {
+			/* MOV to CR4 causes a general-protection exception (#GP) if it would change
+			 * CR4.PCIDE from 0 to 1 and either IA32_EFER.LMA = 0 or CR3[11:0] != 000H
+			 */
+			if ((cr4 & CR4_PCIDE) != 0UL) {
+				uint64_t guest_cr3 = exec_vmread(VMX_GUEST_CR3);
+				/* For now, HV passes-through PCID capability to guest, check X86_FEATURE_PCID of
+				 * pcpu capabilities directly.
+				 */
+				if ((!pcpu_has_cap(X86_FEATURE_PCID)) || (!is_long_mode(vcpu)) ||
+				   ((guest_cr3 & 0xFFFUL) != 0UL)) {
+					pr_dbg("Failed to enable CR4.PCIE");
+					err_found = true;
+					vcpu_inject_gp(vcpu, 0U);
+				}
+			} else {
+				/* The instruction invalidates all TLB entries (including global entries) and
+				 * all entries in all paging-structure caches (for all PCIDs) if it changes the
+				 * value of the CR4.PCIDE from 1 to 0
+				 */
+				vcpu_make_request(vcpu, ACRN_REQUEST_EPT_FLUSH);
+			}
+		}
+
 		if (err_found == false) {
 			/* Clear forced off bits */
 			cr4_shadow = cr4 & ~CR4_MCE;
@@ -337,7 +363,7 @@ static void vmx_write_cr4(struct acrn_vcpu *vcpu, uint64_t cr4)
 			/* clear read cache, next time read should from VMCS */
 			bitmap_clear_lock(CPU_REG_CR4, &vcpu->reg_cached);
 
-			pr_dbg("VMM: Try to write %016llx, allow to write 0x%016llx to CR4", cr4, cr4_vmx);
+			pr_dbg("VMM: Try to write %016lx, allow to write 0x%016lx to CR4", cr4, cr4_vmx);
 		}
 	}
 }
@@ -388,12 +414,12 @@ void init_cr0_cr4_host_mask(void)
 
 	exec_vmwrite(VMX_CR0_GUEST_HOST_MASK, cr0_host_owned_bits);
 	/* Output CR0 mask value */
-	pr_dbg("CR0 guest-host mask value: 0x%016llx", cr0_host_owned_bits);
+	pr_dbg("CR0 guest-host mask value: 0x%016lx", cr0_host_owned_bits);
 
 
 	exec_vmwrite(VMX_CR4_GUEST_HOST_MASK, cr4_host_owned_bits);
 	/* Output CR4 mask value */
-	pr_dbg("CR4 guest-host mask value: 0x%016llx", cr4_host_owned_bits);
+	pr_dbg("CR4 guest-host mask value: 0x%016lx", cr4_host_owned_bits);
 }
 
 uint64_t vcpu_get_cr0(struct acrn_vcpu *vcpu)

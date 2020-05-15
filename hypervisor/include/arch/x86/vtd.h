@@ -6,7 +6,12 @@
 
 #ifndef VTD_H
 #define VTD_H
-#include <ptdev.h>
+#include <types.h>
+#include <pci.h>
+#include <platform_acpi_info.h>
+
+#define INVALID_DRHD_INDEX 0xFFFFFFFFU
+
 /*
  * Intel IOMMU register specification per version 1.0 public spec.
  */
@@ -48,12 +53,26 @@ enum acpi_dmar_scope_type {
 };
 
 struct iommu_domain {
-	bool is_host;
-	bool is_tt_ept;     /* if reuse EPT of the domain */
 	uint16_t vm_id;
 	uint32_t addr_width;   /* address width of the domain */
 	uint64_t trans_table_ptr;
-	bool iommu_snoop;
+};
+
+union source {
+	uint16_t ioapic_id;
+	union pci_bdf msi;
+};
+
+struct intr_source {
+	bool is_msi;
+	union source src;
+	/*
+	 * pid_paddr = 0: invalid address, indicate that remapped mode shall be used
+	 *
+	 * pid_paddr != 0: physical address of posted interrupt descriptor, indicate
+	 * that posted mode shall be used
+	 */
+	uint64_t pid_paddr;
 };
 
 static inline uint8_t dmar_ver_major(uint64_t version)
@@ -457,8 +476,8 @@ static inline uint16_t dma_frcd_up_sid(uint64_t up_sid)
 	return ((uint16_t)up_sid & 0xffffU);
 }
 
-#define MAX_DRHDS		4
-#define MAX_DRHD_DEVSCOPES	4
+#define MAX_DRHDS		DRHD_COUNT
+#define MAX_DRHD_DEVSCOPES	16U
 
 #define DMAR_CONTEXT_TRANSLATION_TYPE_TRANSLATED 0x00U
 #define DMAR_CONTEXT_TRANSLATION_TYPE_RESERVED 0x01U
@@ -496,28 +515,51 @@ struct dmar_entry {
 };
 
 union dmar_ir_entry {
-	struct dmar_entry entry;
-	struct {
-		uint64_t present:1;
-		uint64_t fpd:1;
-		uint64_t dest_mode:1;
-		uint64_t rh:1;
-		uint64_t trigger_mode:1;
-		uint64_t delivery_mode:3;
-		uint64_t sw_bits:4;
-		uint64_t rsvd_1:3;
-		uint64_t mode:1;
-		uint64_t vector:8;
-		uint64_t rsvd_2:8;
-		uint64_t dest:32;
-		uint64_t sid:16;
-		uint64_t sq:2;
-		uint64_t svt:2;
-		uint64_t rsvd_3:44;
+	struct dmar_entry value;
+
+	union {
+		/* Remapped mode */
+		struct {
+			uint64_t present:1;
+			uint64_t fpd:1;
+			uint64_t dest_mode:1;
+			uint64_t rh:1;
+			uint64_t trigger_mode:1;
+			uint64_t delivery_mode:3;
+			uint64_t avail:4;
+			uint64_t rsvd_1:3;
+			uint64_t mode:1;
+			uint64_t vector:8;
+			uint64_t rsvd_2:8;
+			uint64_t dest:32;
+
+			uint64_t sid:16;
+			uint64_t sq:2;
+			uint64_t svt:2;
+			uint64_t rsvd_3:44;
+		} remap;
+
+		/* Posted mode */
+		struct {
+			uint64_t present:1;
+			uint64_t fpd:1;
+			uint64_t rsvd_1:6;
+			uint64_t avail:4;
+			uint64_t rsvd_2:2;
+			uint64_t urgent:1;
+			uint64_t mode:1;
+			uint64_t vector:8;
+			uint64_t rsvd_3:14;
+			uint64_t pda_l:26;
+
+			uint64_t sid:16;
+			uint64_t sq:2;
+			uint64_t svt:2;
+			uint64_t rsvd_4:12;
+			uint64_t pda_h:32;
+		} post;
 	} bits __packed;
 };
-
-extern struct dmar_info *get_dmar_info(void);
 
 #ifdef CONFIG_ACPI_PARSE_ENABLED
 int32_t parse_dmar_table(struct dmar_info *plat_dmar_info);
@@ -562,7 +604,7 @@ struct iommu_domain;
  * @pre domain != NULL
  *
  */
-int32_t move_pt_device(const struct iommu_domain *from_domain, struct iommu_domain *to_domain, uint8_t bus, uint8_t devfun);
+int32_t move_pt_device(const struct iommu_domain *from_domain, const struct iommu_domain *to_domain, uint8_t bus, uint8_t devfun);
 
 /**
  * @brief Create a iommu domain for a VM specified by vm_id.
@@ -634,17 +676,6 @@ void resume_iommu(void);
 int32_t init_iommu(void);
 
 /**
- * @brief check the iommu if support cache snoop.
- *
- * @param[in] iommu pointer to iommu domain to check
- *
- * @retval true support
- * @retval false not support
- *
- */
-bool iommu_snoop_supported(const struct iommu_domain *iommu);
-
-/**
  * @brief Assign RTE for Interrupt Remapping Table.
  *
  * @param[in] intr_src filled with type of interrupt source and the source
@@ -655,7 +686,7 @@ bool iommu_snoop_supported(const struct iommu_domain *iommu);
  * @retval 0 otherwise
  *
  */
-int32_t dmar_assign_irte(struct intr_source intr_src, union dmar_ir_entry irte, uint16_t index);
+int32_t dmar_assign_irte(const struct intr_source *intr_src, union dmar_ir_entry *irte, uint16_t index);
 
 /**
  * @brief Free RTE for Interrupt Remapping Table.
@@ -664,7 +695,7 @@ int32_t dmar_assign_irte(struct intr_source intr_src, union dmar_ir_entry irte, 
  * @param[in] index into Interrupt Remapping Table
  *
  */
-void dmar_free_irte(struct intr_source intr_src, uint16_t index);
+void dmar_free_irte(const struct intr_source *intr_src, uint16_t index);
 
 /**
  * @brief Flash cacheline(s) for a specific address with specific size.

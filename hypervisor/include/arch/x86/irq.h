@@ -17,8 +17,34 @@
  * @brief public APIs for virtual IRQ
  */
 
-#define ACRN_DBG_PTIRQ		6U
-#define ACRN_DBG_IRQ		6U
+#define DBG_LEVEL_PTIRQ		6U
+#define DBG_LEVEL_IRQ		6U
+
+#define NR_MAX_VECTOR		0xFFU
+#define VECTOR_INVALID		(NR_MAX_VECTOR + 1U)
+#define NR_IRQS			256U
+#define IRQ_INVALID		0xffffffffU
+
+/* # of NR_STATIC_MAPPINGS_1 entries for timer, vcpu notify, and PMI */
+#define NR_STATIC_MAPPINGS_1	3U
+
+/*
+ * The static IRQ/Vector mapping table in irq.c consists of the following entries:
+ * # of NR_STATIC_MAPPINGS_1 entries for timer, vcpu notify, and PMI
+ *
+ * # of CONFIG_MAX_VM_NUM entries for posted interrupt notification, platform
+ * specific but known at build time:
+ * Allocate unique Activation Notification Vectors (ANV) for each vCPU that belongs
+ * to the same pCPU, the ANVs need only be unique within each pCPU, not across all
+ * vCPUs. The max numbers of vCPUs may be running on top of a pCPU is CONFIG_MAX_VM_NUM,
+ * since ACRN does not support 2 vCPUs of same VM running on top of same pCPU.
+ * This reduces # of pre-allocated ANVs for posted interrupts to CONFIG_MAX_VM_NUM,
+ * and enables ACRN to avoid switching between active and wake-up vector values
+ * in the posted interrupt descriptor on vCPU scheduling state changes.
+ */
+#define NR_STATIC_MAPPINGS	(NR_STATIC_MAPPINGS_1 + CONFIG_MAX_VM_NUM)
+
+#define HYPERVISOR_CALLBACK_VHM_VECTOR	0xF3U
 
 /* vectors range for dynamic allocation, usually for devices */
 #define VECTOR_DYNAMIC_START	0x20U
@@ -28,33 +54,33 @@
 #define VECTOR_FIXED_START	0xE0U
 #define VECTOR_FIXED_END	0xFFU
 
-#define VECTOR_TIMER		0xEFU
-#define VECTOR_NOTIFY_VCPU	0xF0U
-#define VECTOR_POSTED_INTR	0xF2U
-#define VECTOR_VIRT_IRQ_VHM	0xF7U
-#define VECTOR_SPURIOUS		0xFFU
-#define VECTOR_HYPERVISOR_CALLBACK_VHM	0xF3U
-#define VECTOR_PMI			0xF4U
+#define TIMER_VECTOR		(VECTOR_FIXED_START)
+#define NOTIFY_VCPU_VECTOR	(VECTOR_FIXED_START + 1U)
+#define PMI_VECTOR		(VECTOR_FIXED_START + 2U)
+/*
+ * Starting vector for posted interrupts
+ * # of CONFIG_MAX_VM_NUM (POSTED_INTR_VECTOR ~ (POSTED_INTR_VECTOR + CONFIG_MAX_VM_NUM - 1U))
+ * consecutive vectors reserved for posted interrupts
+ */
+#define POSTED_INTR_VECTOR	(VECTOR_FIXED_START + NR_STATIC_MAPPINGS_1)
+
+#define TIMER_IRQ		(NR_IRQS - 1U)
+#define NOTIFY_VCPU_IRQ		(NR_IRQS - 2U)
+#define PMI_IRQ			(NR_IRQS - 3U)
+/*
+ * Starting IRQ for posted interrupts
+ * # of CONFIG_MAX_VM_NUM (POSTED_INTR_IRQ ~ (POSTED_INTR_IRQ + CONFIG_MAX_VM_NUM - 1U))
+ * consecutive IRQs reserved for posted interrupts
+ */
+#define POSTED_INTR_IRQ	(NR_IRQS - NR_STATIC_MAPPINGS_1 - CONFIG_MAX_VM_NUM)
 
 /* the maximum number of msi entry is 2048 according to PCI
  * local bus specification
  */
 #define MAX_MSI_ENTRY 0x800U
 
-#define NR_MAX_VECTOR		0xFFU
-#define VECTOR_INVALID		(NR_MAX_VECTOR + 1U)
-#define NR_IRQS		256U
-#define IRQ_INVALID		0xffffffffU
-
-#define NR_STATIC_MAPPINGS     (4U)
-#define TIMER_IRQ		(NR_IRQS - 1U)
-#define NOTIFY_IRQ		(NR_IRQS - 2U)
-#define POSTED_INTR_NOTIFY_IRQ	(NR_IRQS - 3U)
-#define PMI_IRQ			(NR_IRQS - 4U)
-
 #define DEFAULT_DEST_MODE	IOAPIC_RTE_DESTMODE_LOGICAL
 #define DEFAULT_DELIVERY_MODE	IOAPIC_RTE_DELMODE_LOPRI
-#define ALL_CPUS_MASK		(uint32_t) (((uint32_t)1U << (uint32_t) get_pcpu_nums()) - (uint32_t)1U)
 
 #define IRQ_ALLOC_BITMAP_SIZE	INT_DIV_ROUNDUP(NR_IRQS, 64U)
 
@@ -65,6 +91,7 @@
 #define IRQF_PT		(1U << 2U)	/* 1: for passthrough dev */
 
 struct acrn_vcpu;
+struct acrn_vm;
 
 /*
  * Definition of the stack frame layout
@@ -76,6 +103,7 @@ struct intr_excp_ctx {
 	uint64_t rip;
 	uint64_t cs;
 	uint64_t rflags;
+	uint64_t rsp;
 	uint64_t ss;
 };
 
@@ -86,13 +114,14 @@ struct smp_call_info_data {
 };
 
 void smp_call_function(uint64_t mask, smp_call_func_t func, void *data);
+bool is_notification_nmi(const struct acrn_vm *vm);
 
 void init_default_irqs(uint16_t cpu_id);
 
 void dispatch_exception(struct intr_excp_ctx *ctx);
 
 void setup_notification(void);
-void setup_posted_intr_notification(void);
+void setup_pi_notification(void);
 
 typedef void (*spurious_handler_t)(uint32_t vector);
 extern spurious_handler_t spurious_handler;
@@ -105,6 +134,8 @@ uint32_t alloc_irq_vector(uint32_t irq);
 #define HV_ARCH_VCPU_RFLAGS_RF              (1UL<<16U)
 
 /* Interruptability State info */
+
+#define HV_ARCH_VCPU_BLOCKED_BY_NMI         (1UL<<3U)
 #define HV_ARCH_VCPU_BLOCKED_BY_MOVSS       (1UL<<1U)
 #define HV_ARCH_VCPU_BLOCKED_BY_STI         (1UL<<0U)
 
@@ -206,6 +237,7 @@ void vcpu_make_request(struct acrn_vcpu *vcpu, uint16_t eventid);
  * @pre vcpu != NULL
  */
 int32_t exception_vmexit_handler(struct acrn_vcpu *vcpu);
+int32_t nmi_window_vmexit_handler(struct acrn_vcpu *vcpu);
 int32_t interrupt_window_vmexit_handler(struct acrn_vcpu *vcpu);
 int32_t external_interrupt_vmexit_handler(struct acrn_vcpu *vcpu);
 int32_t acrn_handle_pending_request(struct acrn_vcpu *vcpu);
@@ -300,6 +332,15 @@ uint32_t irq_to_vector(uint32_t irq);
  * @param ctx Pointer to interrupt exception context
  */
 void dispatch_interrupt(const struct intr_excp_ctx *ctx);
+
+/**
+ * @brief Handle NMI
+ *
+ * To handle an NMI
+ *
+ * @param ctx Pointer to interrupt exception context
+ */
+void handle_nmi(__unused struct intr_excp_ctx *ctx);
 
 /**
  * @brief Initialize interrupt

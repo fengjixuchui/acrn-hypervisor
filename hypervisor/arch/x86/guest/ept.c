@@ -16,7 +16,19 @@
 #include <logmsg.h>
 #include <trace.h>
 
-#define ACRN_DBG_EPT	6U
+#define DBG_LEVEL_EPT	6U
+
+bool ept_is_mr_valid(const struct acrn_vm *vm, uint64_t base, uint64_t size)
+{
+	bool valid = true;
+	uint64_t end = base + size;
+	uint64_t top_address_space = vm->arch_vm.ept_mem_ops.info->ept.top_address_space;
+	if ((end <= base) || (end > top_address_space)) {
+		valid = false;
+	}
+
+	return valid;
+}
 
 void destroy_ept(struct acrn_vm *vm)
 {
@@ -81,10 +93,10 @@ int32_t ept_misconfig_vmexit_handler(__unused struct acrn_vcpu *vcpu)
 	status = -EINVAL;
 
 	/* TODO - EPT Violation handler */
-	pr_fatal("%s, Guest linear address: 0x%016llx ",
+	pr_fatal("%s, Guest linear address: 0x%016lx ",
 			__func__, exec_vmread(VMX_GUEST_LINEAR_ADDR));
 
-	pr_fatal("%s, Guest physical address: 0x%016llx ",
+	pr_fatal("%s, Guest physical address: 0x%016lx ",
 			__func__, exec_vmread64(VMX_GUEST_PHYSICAL_ADDR_FULL));
 
 	ASSERT(status == 0, "EPT Misconfiguration is not handled.\n");
@@ -101,18 +113,14 @@ void ept_add_mr(struct acrn_vm *vm, uint64_t *pml4_page,
 	struct acrn_vcpu *vcpu;
 	uint64_t prot = prot_orig;
 
-	dev_dbg(ACRN_DBG_EPT, "%s, vm[%d] hpa: 0x%016llx gpa: 0x%016llx size: 0x%016llx prot: 0x%016x\n",
+	dev_dbg(DBG_LEVEL_EPT, "%s, vm[%d] hpa: 0x%016lx gpa: 0x%016lx size: 0x%016lx prot: 0x%016x\n",
 			__func__, vm->vm_id, hpa, gpa, size, prot);
 
-	/* EPT & VT-d share the same page tables, set SNP bit
-	 * to force snooping of PCIe devices if the page
-	 * is cachable
-	 */
-	if (((prot & EPT_MT_MASK) != EPT_UNCACHED) && iommu_snoop_supported(vm->iommu)) {
-		prot |= EPT_SNOOP_CTRL;
-	}
+	spinlock_obtain(&vm->ept_lock);
 
 	mmu_add(pml4_page, hpa, gpa, size, prot, &vm->arch_vm.ept_mem_ops);
+
+	spinlock_release(&vm->ept_lock);
 
 	foreach_vcpu(i, vm, vcpu) {
 		vcpu_make_request(vcpu, ACRN_REQUEST_EPT_FLUSH);
@@ -127,13 +135,13 @@ void ept_modify_mr(struct acrn_vm *vm, uint64_t *pml4_page,
 	uint16_t i;
 	uint64_t local_prot = prot_set;
 
-	dev_dbg(ACRN_DBG_EPT, "%s,vm[%d] gpa 0x%llx size 0x%llx\n", __func__, vm->vm_id, gpa, size);
+	dev_dbg(DBG_LEVEL_EPT, "%s,vm[%d] gpa 0x%lx size 0x%lx\n", __func__, vm->vm_id, gpa, size);
 
-	if (((local_prot & EPT_MT_MASK) != EPT_UNCACHED) && iommu_snoop_supported(vm->iommu)) {
-		local_prot |= EPT_SNOOP_CTRL;
-	}
+	spinlock_obtain(&vm->ept_lock);
 
 	mmu_modify_or_del(pml4_page, gpa, size, local_prot, prot_clr, &(vm->arch_vm.ept_mem_ops), MR_MODIFY);
+
+	spinlock_release(&vm->ept_lock);
 
 	foreach_vcpu(i, vm, vcpu) {
 		vcpu_make_request(vcpu, ACRN_REQUEST_EPT_FLUSH);
@@ -147,9 +155,13 @@ void ept_del_mr(struct acrn_vm *vm, uint64_t *pml4_page, uint64_t gpa, uint64_t 
 	struct acrn_vcpu *vcpu;
 	uint16_t i;
 
-	dev_dbg(ACRN_DBG_EPT, "%s,vm[%d] gpa 0x%llx size 0x%llx\n", __func__, vm->vm_id, gpa, size);
+	dev_dbg(DBG_LEVEL_EPT, "%s,vm[%d] gpa 0x%lx size 0x%lx\n", __func__, vm->vm_id, gpa, size);
+
+	spinlock_obtain(&vm->ept_lock);
 
 	mmu_modify_or_del(pml4_page, gpa, size, 0UL, 0UL, &vm->arch_vm.ept_mem_ops, MR_DEL);
+
+	spinlock_release(&vm->ept_lock);
 
 	foreach_vcpu(i, vm, vcpu) {
 		vcpu_make_request(vcpu, ACRN_REQUEST_EPT_FLUSH);

@@ -1,19 +1,19 @@
 .. _Ubuntu Service OS:
 
-Using Ubuntu as the Service OS
-##############################
+Run Ubuntu as the Service VM
+############################
 
-This document builds on the :ref:`getting_started`, and explains how to use
-Ubuntu instead of using `Clear Linux OS`_ as the Service OS with the ACRN
-hypervisor. (Note that different OSes can be used for the Service and User OS.)
-In the following instructions we'll build on material in the
-:ref:`getting-started-apl-nuc`.
+This document builds on the :ref:`getting_started` series and explains how
+to use Ubuntu instead of `Clear Linux OS`_ as the Service VM with the ACRN
+hypervisor. (Note that different OSs can be used for the Service and User
+VM.) In the following instructions, we will build on material described in
+:ref:`kbl-nuc-sdc`.
 
 Install Ubuntu (natively)
 *************************
 
-Ubuntu 18.04.1 LTS was used throughout this document, other older versions such as
-16.04 works too.
+Ubuntu 18.04.1 LTS is used throughout this document; other older versions
+such as 16.04 also work.
 
 * Download Ubuntu 18.04 from the `Ubuntu 18.04.1 LTS (Bionic Beaver) page
   <http://releases.ubuntu.com/18.04.1/>`_ and select the `ubuntu-18.04.1-desktop-amd64.iso
@@ -22,12 +22,12 @@ Ubuntu 18.04.1 LTS was used throughout this document, other older versions such 
 * Follow Ubuntu's `online instructions <https://tutorials.ubuntu.com/tutorial/tutorial-install-ubuntu-desktop>`_
   to install it on your device.
 
-.. note::
-   Configure your device's proxy settings to have full internet access.
+  .. note::
+     Configure your device's proxy settings to have full internet access.
 
 * While not strictly required, enabling SSH gives the user a very useful
-  mechanism for accessing the Service OS remotely or when running one or more
-  User OS (UOS). Follow these steps to enable it on the Ubuntu SOS:
+  mechanism for accessing the Service VM remotely or when running one or more
+  User VM. Follow these steps to enable it on the Ubuntu Service VM:
 
   .. code-block:: none
 
@@ -35,34 +35,42 @@ Ubuntu 18.04.1 LTS was used throughout this document, other older versions such 
      sudo service ssh status
      sudo service ssh start
 
+* If you plan to SSH Ubuntu as root, you must also modify ``/etc/ssh/sshd_config``:
+
+  .. code-block:: none
+
+     PermitRootLogin yes
+
 Install ACRN
 ************
 
-ACRN components are distributed in source form, so you'll need to download
+ACRN components are distributed in source form, so you must download
 the source code, build it, and install it on your device.
 
-1. Install the build tools and dependencies
+1. Install the build tools and dependencies.
 
-   Follow the instructions found in the :ref:`getting-started-building` to
+   Follow the instructions found in :ref:`getting-started-building` to
    install all the build tools and dependencies on your system.
 
 #. Clone the `Project ACRN <https://github.com/projectacrn/acrn-hypervisor>`_
-   code repository
+   code repository.
+
+   Enter the following:
 
    .. code-block:: none
 
       cd ~
       git clone https://github.com/projectacrn/acrn-hypervisor
-      git checkout <known-good-tag/release>
+      git checkout acrn-2019w47.1-140000p
 
    .. note::
-      We clone the git repository above but it is also possible to download the
-      tarball for any specific tag or release from the `Project ACRN Github
-      release page <https://github.com/projectacrn/acrn-hypervisor/releases>`_
+      We clone the git repository above but it is also possible to download
+      the tarball for any specific tag or release from the `Project ACRN
+      Github release page <https://github.com/projectacrn/acrn-hypervisor/releases>`_.
 
-#. Build and install ACRN
+#. Build and install ACRN.
 
-   Here is the short version of how to build and install ACRN from source.
+   Here is the short version on how to build and install ACRN from source:
 
    .. code-block:: none
 
@@ -70,17 +78,17 @@ the source code, build it, and install it on your device.
       make
       sudo make install
 
-   For more details, please refer to the :ref:`getting-started-building`.
+   For more details, refer to :ref:`getting-started-building`.
 
-#. Install the hypervisor
+#. Install the hypervisor.
 
-   The ACRN devicemodel and tools were installed as part of the previous step.
-   However, ``make install`` does not install the hypervisor (``acrn.efi``) on
-   your EFI System Partition (ESP), nor does it configure your EFI firmware to
-   boot it automatically. Follow the steps below to perform these operations
-   and complete the ACRN installation.
+   The ACRN device model and tools are installed as part of the previous
+   step. However, ``make install`` does not install the hypervisor (``acrn.efi``) on
+   your EFI System Partition (ESP), nor does it configure your EFI firmware
+   to boot it automatically. Therefore, follow the steps below to perform
+   these operations and complete the ACRN installation.
 
-   #. Add the ACRN hypervisor and Service OS kernel to it (as ``root``)
+   #. Add the ACRN hypervisor and Service VM kernel to it (as ``root``):
 
       .. code-block:: none
 
@@ -92,134 +100,137 @@ the source code, build it, and install it on your device.
 
          fw  fwupx64.efi  grub.cfg  grubx64.efi  MokManager.efi  shimx64.efi
 
-   #. Install the hypervisor (``acrn.efi``)
+   #. Install the hypervisor (``acrn.efi``):
 
       .. code-block:: none
 
          sudo mkdir /boot/efi/EFI/acrn/
          sudo cp ~/acrn-hypervisor/build/hypervisor/acrn.efi /boot/efi/EFI/acrn/
 
-   #. Configure the EFI firmware to boot the ACRN hypervisor by default
+   #. Configure the EFI firmware to boot the ACRN hypervisor by default:
 
       .. code-block:: none
 
          # For SATA
          sudo efibootmgr -c -l "\EFI\acrn\acrn.efi" -d /dev/sda -p 1 \
-                -L "ACRN Hypervisor" -u "bootloader=\EFI\ubuntu\grubx64.efi"
+                -L "ACRN Hypervisor" -u "bootloader=\EFI\ubuntu\grubx64.efi "
          # For NVMe
          sudo efibootmgr -c -l "\EFI\acrn\acrn.efi" -d /dev/nvme0n1 -p 1 \
-                -L "ACRN Hypervisor" -u "bootloader=\EFI\ubuntu\grubx64.efi"
+                -L "ACRN Hypervisor" -u "bootloader=\EFI\ubuntu\grubx64.efi "
 
-   #. Verify that the "ACRN Hypervisor" is added and make sure it will be booted first
+     .. note::
+        Note the extra space at the end of the EFI command-line options
+        strings above. This is a workaround for a current `efi-stub
+        bootloader name issue <https://github.com/projectacrn/acrn-hypervisor/issues/4520>`_.
+        It ensures that the end of the string is properly detected.
+
+   #. Verify that "ACRN Hypervisor" is added and that it will boot first:
 
       .. code-block:: none
 
          sudo efibootmgr -v
 
-   #. You can change the boot order at any time using ``efibootmgr -o XXX,XXX,XXX``
+      You can also verify it by entering the EFI firmware at boot (using :kbd:`F10`).
+
+   #. Change the boot order at any time using ``efibootmgr -o XXX,XXX,XXX``:
 
      .. code-block:: none
 
         sudo efibootmgr -o xxx,xxx,xxx
 
-   .. note::
-      By default, the "ACRN Hypervisor" you have just added should be
-      the first one to boot. Verify this by using ``efibootmgr -v`` or
-      by entering the EFI firmware at boot (using :kbd:`F10`)
-
-Install the Service OS kernel
+Install the Service VM kernel
 *****************************
 
-You can download latest Service OS kernel from
-`<https://download.clearlinux.org/releases/current/clear/x86_64/os/Packages/>`_
+Download the latest Service VM kernel.
 
-1. The latest Service OS kernel from the latest Clear Linux OS release
-   from this area:
-   https://download.clearlinux.org/releases/current/clear/x86_64/os/Packages.  Look for an
-   ``.rpm`` file named ``linux-iot-lts2018-sos-<kernel-version>-<build-version>.x86_64.rpm``.
+1. The latest Service VM kernel from the latest Clear Linux OS release is
+   located here:
+   https://download.clearlinux.org/releases/current/clear/x86_64/os/Packages/.  Look for the following ``.rpm`` file:
+   ``linux-iot-lts2018-sos-<kernel-version>-<build-version>.x86_64.rpm``.
 
-   While we recommend using the "current" (latest) release of Clear Linux OS, you can download
-   a specific Clear Linux release from an area with that release number, e.g.:
-   https://download.clearlinux.org/releases/26440/clear/x86_64/os/Packages/linux-iot-lts2018-sos-4.19.0-22.x86_64.rpm
+   While we recommend using the current (latest) Clear Linux OS release, you
+   can download a specific Clear Linux release from an area with that
+   release number, such as the following:
+   https://download.clearlinux.org/releases/31670/clear/x86_64/os/Packages/linux-iot-lts2018-sos-4.19.78-98.x86_64.rpm
 
-#. Download and extract the latest Service OS kernel(this guide is based on 26440 as the current example)
+#. Download and extract the latest Service VM kernel (this guide uses 31670 as the current example):
 
    .. code-block:: none
 
       sudo mkdir ~/sos-kernel-build
       cd ~/sos-kernel-build
-      wget https://download.clearlinux.org/releases/26440/clear/x86_64/os/Packages/linux-iot-lts2018-sos-4.19.0-22.x86_64.rpm
+      wget https://download.clearlinux.org/releases/31670/clear/x86_64/os/Packages/linux-iot-lts2018-sos-4.19.78-98.x86_64.rpm
       sudo apt-get install rpm2cpio
-      rpm2cpio linux-iot-lts2018-sos-4.19.0-22.x86_64.rpm | cpio -idmv
+      rpm2cpio linux-iot-lts2018-sos-4.19.78-98.x86_64.rpm | cpio -idmv
 
-#. Install the SOS kernel and its drivers (modules)
+#. Install the Service VM kernel and its drivers (modules):
 
    .. code-block:: none
 
-      sudo cp -r ~/sos-kernel-build/usr/lib/modules/4.19.0-22.iot-lts2018-sos/ /lib/modules/
+      sudo cp -r ~/sos-kernel-build/usr/lib/modules/4.19.78-98.iot-lts2018-sos/ /lib/modules/
       sudo mkdir /boot/acrn/
-      sudo cp ~/sos-kernel-build/usr/lib/kernel/org.clearlinux.iot-lts2018-sos.4.19.0-22  /boot/acrn/
+      sudo cp ~/sos-kernel-build/usr/lib/kernel/org.clearlinux.iot-lts2018-sos.4.19.78-98  /boot/acrn/
 
-#. Configure Grub to load the Service OS kernel
+#. Configure Grub to load the Service VM kernel:
 
-   * Modify the ``/etc/grub.d/40_custom`` file to create a new Grub entry that
-     will boot the SOS kernel.
+   * Modify the ``/etc/grub.d/40_custom`` file to create a new Grub entry
+     that will boot the Service VM kernel.
 
      .. code-block:: none
 
-        menuentry 'ACRN ubuntu SOS' {
+        menuentry 'ACRN Ubuntu Service VM' --id ubuntu-service-vm {
                 recordfail
                 load_video
                 insmod gzio
                 insmod part_gpt
                 insmod ext2
-                linux  /boot/acrn/org.clearlinux.iot-lts2018-sos.4.19.0-22  pci_devices_ignore=(0:18:1) console=tty0 console=ttyS0 root=PARTUUID=<UUID of rootfs partition> rw rootwait ignore_loglevel no_timer_check consoleblank=0 i915.nuclear_pageflip=1 i915.avail_planes_per_pipe=0x01010F i915.domain_plane_owners=0x011111110000 i915.enable_gvt=1 i915.enable_guc=0 hvlog=2M@0x1FE00000
+                linux  /boot/acrn/org.clearlinux.iot-lts2018-sos.4.19.78-98  pci_devices_ignore=(0:18:1) console=tty0 console=ttyS0 root=PARTUUID=<UUID of rootfs partition> rw rootwait ignore_loglevel no_timer_check consoleblank=0 i915.nuclear_pageflip=1 i915.avail_planes_per_pipe=0x01010F i915.domain_plane_owners=0x011111110000 i915.enable_gvt=1 i915.enable_guc=0 hvlog=2M@0x1FE00000
         }
 
-   .. note::
-        You need to adjust this to use your partition UUID (``PARTUUID``) for
-        the ``root=`` parameter (or use the device node directly).
+     .. note::
+          Adjust this to use your partition UUID (``PARTUUID``) for the
+          ``root=`` parameter (or use the device node directly).
 
-   .. note::
-        You will also need to adjust the kernel name if you used a different
-        RPM file as the source of your Service OS kernel.
+          Adjust the kernel name if you used a different RPM file as the
+          source of your Service VM kernel.
 
-   .. note::
-        The command line for the kernel in /etc/grub.d/40_custom should be all
-        as a single line, not as multiple lines. Otherwise the kernel will fail to boot
+          The command line for the kernel in ``/etc/grub.d/40_custom``
+          should be entered as a single line, not as multiple lines.
+          Otherwise, the kernel will fail to boot.
 
-   * Modify the ``/etc/default/grub`` file to make the grub menu visible when booting.
-     There are a couple of lines to be modified, as shown below.
+   * Modify the ``/etc/default/grub`` file to make the grub menu visible
+     when booting and make it load the Service VM kernel by default.
+     Modify the lines shown below:
 
      .. code-block:: none
 
+        GRUB_DEFAULT=ubuntu-service-vm
         #GRUB_TIMEOUT_STYLE=hidden
-        #GRUB_HIDDEN_TIMEOUT=0
-        GRUB_HIDDEN_TIMEOUT_QUIET=false
+        GRUB_TIMEOUT=3
 
-   * Update Grub on your system
+   * Update Grub on your system:
 
      .. code-block:: none
 
         sudo update-grub
 
-#. Reboot the system
+#. Reboot the system.
 
-   Reboot system. You should see the Grub menu with the new "ACRN ubuntu SOS"
-   entry. Select it and proceed to booting the platform. The system will start
-   the Ubuntu Desktop and you can now log in (as before).
-
-   .. note::
-       If you don't see the Grub menu after rebooting the system (and you're
-       not booting into the ACRN hypervisor), you'll need to enter the
-       EFI firmware at boot (using :kbd:`F10`) and manually select ``ACRN Hypervisor``.
+   Reboot the system. You should see the Grub menu with the new ACRN ``ubuntu-service-vm``
+   entry. Select it and proceed to booting the platform. The system will
+   start the Ubuntu Desktop and you can now log in (as before).
 
    .. note::
-       If you see a black screen on the first-time reboot after installing the ACRN Hypervisor,
-       wait a few moments and the Ubuntu desktop will be displayed.
+      If you don't see the Grub menu after rebooting the system (and you are
+      not booting into the ACRN hypervisor), enter the EFI firmware at boot
+      (using :kbd:`F10`) and manually select ``ACRN Hypervisor``.
 
-   To check if the hypervisor is effectively running, check ``dmesg``. The
-   typical output of a successful installation will look like this:
+       If you see a black screen on the first-time reboot after installing
+       the ACRN Hypervisor, wait a few moments and the Ubuntu desktop will
+       display.
+
+   To verify that the hypervisor is effectively running, check ``dmesg``. The
+   typical output of a successful installation resembles the following:
 
    .. code-block:: none
 
@@ -227,35 +238,38 @@ You can download latest Service OS kernel from
       [    0.000000] Hypervisor detected: ACRN
       [    0.862942] ACRN HVLog: acrn_hvlog_init
 
-Prepare the User OS (UOS)
-*************************
+.. _prepare-UOS:
 
-For the User OS, we are using the same `Clear Linux OS`_ release version as the Service OS.
+Prepare the User VM
+*******************
 
-* Download the Clear Linux OS image from `<https://download.clearlinux.org>`_
+For the User VM, we are using the same `Clear Linux OS`_ release version as
+for the Service VM.
+
+* Download the Clear Linux OS image from `<https://download.clearlinux.org>`_:
 
   .. code-block:: none
 
      cd ~
-     wget https://download.clearlinux.org/releases/26440/clear/clear-26440-kvm.img.xz
-     unxz clear-26440-kvm.img.xz
+     wget https://download.clearlinux.org/releases/31670/clear/clear-31670-kvm.img.xz
+     unxz clear-31670-kvm.img.xz
 
-* Download the "kernel-iot-lts2018" kernel
+* Download the "linux-iot-lts2018" kernel:
 
   .. code-block:: none
 
      sudo mkdir ~/uos-kernel-build
      cd ~/uos-kernel-build
-     wget https://download.clearlinux.org/releases/26440/clear/x86_64/os/Packages/linux-iot-lts2018-4.19.0-22.x86_64.rpm
-     rpm2cpio linux-iot-lts2018-4.19.0-22.x86_64.rpm | cpio -idmv
+     wget https://download.clearlinux.org/releases/31670/clear/x86_64/os/Packages/linux-iot-lts2018-sos-4.19.78-98.x86_64.rpm
+     rpm2cpio linux-iot-lts2018-4.19.78-98.x86_64.rpm | cpio -idmv
 
-* Update the UOS kernel modules
+* Update the User VM kernel modules:
 
   .. code-block:: none
 
-     sudo losetup -f -P --show ~/clear-26440-kvm.img
+     sudo losetup -f -P --show ~/clear-31670-kvm.img
      sudo mount /dev/loop0p3 /mnt
-     sudo cp -r ~/uos-kernel-build/usr/lib/modules/4.19.0-22.iot-lts2018/ /mnt/lib/modules/
+     sudo cp -r ~/uos-kernel-build/usr/lib/modules/4.19.78-98.iot-lts2018/ /mnt/lib/modules/
      sudo cp -r ~/uos-kernel-build/usr/lib/kernel /lib/modules/
      sudo umount /mnt
      sync
@@ -266,46 +280,53 @@ For the User OS, we are using the same `Clear Linux OS`_ release version as the 
 
      sudo chmod 777 /dev/acrn_vhm
 
-* One additional package is needed
+* Add the following package:
 
   .. code-block:: none
 
-     sudo apt-get install iasl
-     sudo cp /usr/bin/iasl /usr/sbin/iasl
+      sudo apt update
+      sudo apt install m4 bison flex zlib1g-dev
+      cd ~
+      wget https://acpica.org/sites/acpica/files/acpica-unix-20191018.tar.gz
+      tar zxvf acpica-unix-20191018.tar.gz
+      cd acpica-unix-20191018
+      make clean && make iasl
+      sudo cp ./generate/unix/bin/iasl /usr/sbin/
 
-* Adjust ``launch_uos.sh``
+
+* Adjust the ``launch_uos.sh`` script:
 
   You need to adjust the ``/usr/share/acrn/samples/nuc/launch_uos.sh`` script
-  to match your installation. These are the couple of lines you need to modify:
+  to match your installation. Modify the following lines:
 
   .. code-block:: none
 
-     -s 3,virtio-blk,~/clear-26440-kvm.img
-     -k /lib/modules/kernel/default-iot-lts2018
+     -s 3,virtio-blk,/root/clear-31670-kvm.img \
 
   .. note::
-      The image of UOS can be stored in other directories instead of ``~/``,
-      and please remember to modify the directory of image in ``launch_uos.sh`` too.
+     The User VM image can be stored in other directories instead of ``~/``.
+     Remember to also modify the image directory in ``launch_uos.sh``.
 
-Start the User OS (UOS)
-***********************
+Start the User VM
+*****************
 
-You are now all set to start the User OS (UOS)
+You are now all set to start the User VM:
 
  .. code-block:: none
 
    sudo /usr/share/acrn/samples/nuc/launch_uos.sh
 
-**Congratulations**, you are now watching the User OS booting up!
+**Congratulations**, you are now watching the User VM booting up!
 
+.. _enable-network-sharing-user-vm:
 
-Enabling network sharing
-************************
+Enable network sharing
+**********************
 
-After booting up the SOS and UOS, network sharing must be enabled to give network
-access to the UOS by enabling the TAP and networking bridge in the SOS.  The following
-script example shows how to set this up (verified in Ubuntu 16.04 and 18.04 as the SOS).
-
+After booting up the Service VM and User VM, network sharing must be enabled
+to give network access to the Service VM by enabling the TAP and networking
+bridge in the Service VM. The following script example shows how to set
+this up (verified in Ubuntu 16.04 and 18.04 as the Service VM).
 
  .. code-block:: none
 
@@ -329,14 +350,15 @@ script example shows how to set this up (verified in Ubuntu 16.04 and 18.04 as t
     ip link set dev tap0 up
 
 .. note::
-   The SOS network interface is called ``enp3s0`` in the script above. You will need
-   to adjust the script if your system uses a different name (e.g. ``eno1``).
+   The Service VM network interface is called ``enp3s0`` in the script
+   above. Adjust the script if your system uses a different name (e.g.
+   ``eno1``).
 
-Enabling USB keyboard and mouse
-*******************************
+Enable the USB keyboard and mouse
+*********************************
 
-Please refer to :ref:`getting-started-apl-nuc` for enabling the
-USB keyboard and mouse for the UOS.
+Refer to :ref:`kbl-nuc-sdc` for instructions on enabling the USB keyboard
+and mouse for the User VM.
 
 
 .. _Clear Linux OS: https://clearlinux.org

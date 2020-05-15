@@ -7,7 +7,6 @@
 #include <vm.h>
 #include <e820.h>
 #include <zeropage.h>
-#include <boot_context.h>
 #include <ept.h>
 #include <mmu.h>
 #include <multiboot.h>
@@ -56,14 +55,14 @@ static uint32_t create_zeropage_e820(struct zero_page *zp, const struct acrn_vm 
 
 /**
  * @pre vm != NULL
+ * @pre (vm->min_mem_addr <= kernel_load_addr) && (kernel_load_addr < vm->max_mem_addr)
  */
 static uint64_t create_zero_page(struct acrn_vm *vm)
 {
-	struct zero_page *zeropage;
+	struct zero_page *zeropage, *hva;
 	struct sw_kernel_info *sw_kernel = &(vm->sw.kernel_info);
 	struct sw_module_info *bootargs_info = &(vm->sw.bootargs_info);
 	struct sw_module_info *ramdisk_info = &(vm->sw.ramdisk_info);
-	struct zero_page *hva;
 	uint64_t gpa, addr;
 
 	/* Set zeropage in Linux Guest RAM region just past boot args */
@@ -75,6 +74,14 @@ static uint64_t create_zero_page(struct acrn_vm *vm)
 	/* clear the zeropage */
 	(void)memset(zeropage, 0U, MEM_2K);
 
+#ifdef CONFIG_MULTIBOOT2
+	if (is_sos_vm(vm)) {
+		struct acrn_multiboot_info *mbi = get_multiboot_info();
+
+		(void)memcpy_s(&(zeropage->boot_efi_info), sizeof(zeropage->boot_efi_info),
+				&(mbi->mi_efi_info), sizeof(mbi->mi_efi_info));
+	}
+#endif
 	/* copy part of the header into the zero page */
 	hva = (struct zero_page *)gpa2hva(vm, (uint64_t)sw_kernel->kernel_load_addr);
 	(void)memcpy_s(&(zeropage->hdr), sizeof(zeropage->hdr),
@@ -146,7 +153,7 @@ static void prepare_loading_bzimage(struct acrn_vm *vm, struct acrn_vcpu *vcpu)
 
 		reserving_1g_pages = (vm_config->memory.size >> 30U) - NUM_REMAIN_1G_PAGES;
 		if (reserving_1g_pages > 0) {
-			snprintf(dyn_bootargs, 100U, " hugepagesz=1G hugepages=%lld", reserving_1g_pages);
+			snprintf(dyn_bootargs, 100U, " hugepagesz=1G hugepages=%ld", reserving_1g_pages);
 			(void)copy_to_gpa(vm, dyn_bootargs, ((uint64_t)bootargs_info->load_addr
 				+ bootargs_info->size), (strnlen_s(dyn_bootargs, 99U) + 1U));
 		}
@@ -181,7 +188,7 @@ int32_t direct_boot_sw_loader(struct acrn_vm *vm)
 	struct sw_module_info *bootargs_info = &(vm->sw.bootargs_info);
 	struct sw_module_info *ramdisk_info = &(vm->sw.ramdisk_info);
 	/* get primary vcpu */
-	struct acrn_vcpu *vcpu = vcpu_from_vid(vm, BOOT_CPU_ID);
+	struct acrn_vcpu *vcpu = vcpu_from_vid(vm, BSP_CPU_ID);
 
 	pr_dbg("Loading guest to run-time location");
 
@@ -225,7 +232,7 @@ int32_t direct_boot_sw_loader(struct acrn_vm *vm)
 	if (ret == 0) {
 		/* Set VCPU entry point to kernel entry */
 		vcpu_set_rip(vcpu, (uint64_t)sw_kernel->kernel_entry_addr);
-		pr_info("%s, VM %hu VCPU %hu Entry: 0x%016llx ", __func__, vm->vm_id, vcpu->vcpu_id,
+		pr_info("%s, VM %hu VCPU %hu Entry: 0x%016lx ", __func__, vm->vm_id, vcpu->vcpu_id,
 			sw_kernel->kernel_entry_addr);
 	}
 

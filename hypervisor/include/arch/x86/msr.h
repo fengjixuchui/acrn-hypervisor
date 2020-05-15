@@ -18,6 +18,7 @@
 #define MSR_IA32_TIME_STAMP_COUNTER		0x00000010U
 #define MSR_IA32_PLATFORM_ID			0x00000017U
 #define MSR_IA32_APIC_BASE			0x0000001BU
+#define MSR_TEST_CTL				0x00000033U
 #define MSR_IA32_FEATURE_CONTROL		0x0000003AU
 #define MSR_IA32_TSC_ADJUST			0x0000003BU
 /* Speculation Control */
@@ -40,6 +41,7 @@
 #define MSR_IA32_PMC5				0x000000C6U
 #define MSR_IA32_PMC6				0x000000C7U
 #define MSR_IA32_PMC7				0x000000C8U
+#define MSR_IA32_CORE_CAPABILITIES		0x000000CFU
 /* Max. qualified performance clock counter */
 #define MSR_IA32_MPERF				0x000000E7U
 /* Actual performance clock counter */
@@ -335,15 +337,13 @@
 #define MSR_IA32_QM_EVTSEL			0x00000C8DU
 #define MSR_IA32_QM_CTR				0x00000C8EU
 #define MSR_IA32_PQR_ASSOC			0x00000C8FU
-#define MSR_IA32_L3_MASK_0			0x00000C90U
+#define MSR_IA32_L3_MASK_BASE			0x00000C90U
 #define MSR_IA32_XSS				0x00000DA0U
 #define MSR_IA32_PKG_HDC_CTL			0x00000DB0U
 #define MSR_IA32_PM_CTL1			0x00000DB1U
 #define MSR_IA32_THREAD_STALL			0x00000DB2U
-#define MSR_IA32_L2_MASK_0			0x00000D10U
-#define MSR_IA32_L2_MASK_1			0x00000D11U
-#define MSR_IA32_L2_MASK_2			0x00000D12U
-#define MSR_IA32_L2_MASK_3			0x00000D13U
+#define MSR_IA32_L2_MASK_BASE			0x00000D10U
+#define MSR_IA32_MBA_MASK_BASE			0x00000D50U
 #define MSR_IA32_BNDCFGS			0x00000D90U
 #define MSR_IA32_EFER				0xC0000080U
 #define MSR_IA32_STAR				0xC0000081U
@@ -408,8 +408,13 @@
 #define MSR_LASTBRANCH_1			0x000001DCU
 #define MSR_LASTBRANCH_2			0x000001DDU
 #define MSR_LASTBRANCH_3			0x000001DEU
+#define MSR_PRMRR_PHYS_BASE			0x000001F4U
+#define MSR_PRMRR_PHYS_MASK			0x000001F5U
 #define MSR_PRMRR_VALID_CONFIG			0x000001FBU
 #define MSR_POWER_CTL				0x000001FCU
+#define MSR_UNCORE_PRMRR_PHYS_BASE		0x000002F4U
+#define MSR_UNCORE_PRMRR_PHYS_MASK		0x000002F5U
+
 #define MSR_BR_DETECT_CTRL			0x00000350U
 #define MSR_BR_DETECT_STATUS			0x00000351U
 #define MSR_UNCORE_PERF_GLOBAL_OVF_CTRL		0x00000393U
@@ -566,10 +571,13 @@
 /* Miscellaneous data */
 #define MSR_IA32_MISC_UNRESTRICTED_GUEST	(1U<<5U)
 
+/* 5 high-order bits in every field are reserved */
+#define PAT_FIELD_RSV_BITS			(0xF8UL)
+
 #ifndef ASSEMBLER
-static inline bool pat_mem_type_invalid(uint64_t x)
+static inline bool is_pat_mem_type_invalid(uint64_t x)
 {
-	return ((x & ~0x7UL) != 0UL || (x & 0x6UL) == 0x2UL);
+	return (((x & PAT_FIELD_RSV_BITS) != 0UL) || ((x & 0x6UL) == 0x2UL));
 }
 
 static inline bool is_x2apic_msr(uint32_t msr)
@@ -588,9 +596,6 @@ void update_msr_bitmap_x2apic_apicv(struct acrn_vcpu *vcpu);
 void update_msr_bitmap_x2apic_passthru(struct acrn_vcpu *vcpu);
 
 #endif /* ASSEMBLER */
-
-/* 5 high-order bits in every field are reserved */
-#define PAT_FIELD_RSV_BITS			(0xF8U)
 
 #define PAT_POWER_ON_VALUE	(PAT_MEM_TYPE_WB + \
 	(PAT_MEM_TYPE_WT << 8U) + \
@@ -628,12 +633,13 @@ void update_msr_bitmap_x2apic_passthru(struct acrn_vcpu *vcpu);
 #define PRED_SET_IBPB				(1U << 0U)
 
 /* IA32 ARCH Capabilities bit */
-#define IA32_ARCH_CAP_RDCL_NO			(1U << 0U)
-#define IA32_ARCH_CAP_IBRS_ALL			(1U << 1U)
-#define IA32_ARCH_CAP_RSBA			(1U << 2U)
-#define IA32_ARCH_CAP_SKIP_L1DFL_VMENTRY	(1U << 3U)
-#define IA32_ARCH_CAP_SSB_NO			(1U << 4U)
-#define IA32_ARCH_CAP_MDS_NO			(1U << 5U)
+#define IA32_ARCH_CAP_RDCL_NO			(1UL << 0U)
+#define IA32_ARCH_CAP_IBRS_ALL			(1UL << 1U)
+#define IA32_ARCH_CAP_RSBA			(1UL << 2U)
+#define IA32_ARCH_CAP_SKIP_L1DFL_VMENTRY	(1UL << 3U)
+#define IA32_ARCH_CAP_SSB_NO			(1UL << 4U)
+#define IA32_ARCH_CAP_MDS_NO			(1UL << 5U)
+#define IA32_ARCH_CAP_IF_PSCHANGE_MC_NO		(1UL << 6U)
 
 /* Flush L1 D-cache */
 #define IA32_L1D_FLUSH				(1UL << 0U)

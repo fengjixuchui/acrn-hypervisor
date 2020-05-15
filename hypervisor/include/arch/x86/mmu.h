@@ -40,6 +40,7 @@
 #define MEM_1M		(MEM_1K * 1024U)
 #define MEM_2M		(MEM_1M * 2U)
 #define MEM_1G		(MEM_1M * 1024U)
+#define MEM_2G		(1024UL * 1024UL * 1024UL * 2UL)
 
 #ifndef ASSEMBLER
 
@@ -165,11 +166,11 @@ void flush_address_space(void *addr, uint64_t size);
 /**
  * @brief Guest-physical mappings and combined mappings invalidation
  *
- * @param[in] vcpu the pointer that points the vcpu data structure
+ * @param[in] eptp the pointer that points the eptp
  *
  * @return None
  */
-void invept(const struct acrn_vcpu *vcpu);
+void invept(const void *eptp);
 
 static inline void cache_flush_invalidate_all(void)
 {

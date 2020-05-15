@@ -91,6 +91,8 @@ static uint64_t pci_emul_membase64;
 
 extern bool skip_pci_mem64bar_workaround;
 
+struct mmio_rsvd_rgn reserved_bar_regions[REGION_NUMS];
+
 #define	PCI_EMUL_IOBASE		0x2000
 #define	PCI_EMUL_IOLIMIT	0x10000
 
@@ -105,6 +107,94 @@ static void pci_lintr_update(struct pci_vdev *dev);
 static void pci_cfgrw(struct vmctx *ctx, int vcpu, int in, int bus, int slot,
 		      int func, int coff, int bytes, uint32_t *val);
 static void pci_emul_free_msixcap(struct pci_vdev *pdi);
+
+int compare_mmio_rgns(const void *data1, const void *data2)
+{
+    struct mmio_rsvd_rgn *rng1, *rng2;
+
+    rng1 = (struct mmio_rsvd_rgn*)data1;
+    rng2 = (struct mmio_rsvd_rgn*)data2;
+
+    if(!rng1->vdev)
+            return 1;
+    if(!rng2->vdev)
+            return -1;
+    return (rng1->start - rng2->start);
+}
+
+/* FIXME: the new registered region may overlap with exist mmio regions
+ * whatever they are registered by dm or reserved.
+ * Due to we only has gvt-g to use this feature,
+ * this case rarely happen.
+ */
+int create_mmio_rsvd_rgn(uint64_t start,
+	    uint64_t end, int idx, int bar_type, struct pci_vdev *vdev)
+{
+	int i;
+
+	if(bar_type == PCIBAR_IO){
+		pr_err("fail to create PCIBAR_IO bar_type\n");
+		return -1;
+	}
+
+	for(i = 0; i < REGION_NUMS; i++){
+		if(reserved_bar_regions[i].vdev == NULL){
+			reserved_bar_regions[i].start = start;
+			reserved_bar_regions[i].end = end;
+			reserved_bar_regions[i].idx = idx;
+			reserved_bar_regions[i].bar_type = bar_type;
+			reserved_bar_regions[i].vdev = vdev;
+
+			/* sort reserved_bar_regions array by "start" member,
+			 * if this mmio_rsvd_rgn is not used, put it in the last.
+			 */
+			qsort((void*)reserved_bar_regions, REGION_NUMS,
+					sizeof(reserved_bar_regions[0]),  compare_mmio_rgns);
+			return 0;
+		}
+	}
+
+	pr_err("reserved_bar_regions is overflow\n");
+	return -1;
+}
+
+void destory_mmio_rsvd_rgns(struct pci_vdev *vdev){
+    int i;
+
+    for(i = 0; i < REGION_NUMS; i++)
+		if(reserved_bar_regions[i].vdev == vdev)
+			reserved_bar_regions[i].vdev = NULL;
+}
+
+static bool
+is_mmio_rgns_overlap(uint64_t x1, uint64_t x2, uint64_t y1, uint64_t y2)
+{
+	if(x1 <= y2 && y1 <= x2)
+		return true;
+	return false;
+}
+
+/* reserved_bar_regions has sorted mmio_rsvd_rgns.
+ * iterate all mmio_rsvd_rgn in reserved_bar_regions,
+ * if [base, base + size - 1] with any mmio_rsvd_rgn,
+ * adjust base addr to ensure [base, base + size - 1]
+ * won't overlap with reserved mmio_rsvd_rgn
+ */
+static void
+adjust_bar_region(uint64_t *base, uint64_t size, int bar_type)
+{
+	int i;
+
+	for(i = 0; i < REGION_NUMS; i++){
+		if(!reserved_bar_regions[i].vdev ||
+			reserved_bar_regions[i].bar_type != bar_type)
+			continue;
+		if(is_mmio_rgns_overlap(reserved_bar_regions[i].start,
+					reserved_bar_regions[i].end, *base, *base + size -1)){
+			*base = roundup2(reserved_bar_regions[i].end + 1, size);
+		}
+	}
+}
 
 static inline void
 CFGWRITE(struct pci_vdev *dev, int coff, uint32_t val, int bytes)
@@ -129,9 +219,9 @@ CFGREAD(struct pci_vdev *dev, int coff, int bytes)
 }
 
 static inline int
-is_pci_gvt(struct pci_vdev *dev)
+is_pt_pci(struct pci_vdev *dev)
 {
-	if (dev == NULL || strncmp(dev->dev_ops->class_name, "pci-gvt",7))
+	if (dev == NULL || strncmp(dev->dev_ops->class_name, "passthru",8))
 		return 0;
 	else
 		return 1;
@@ -159,7 +249,7 @@ is_pci_gvt(struct pci_vdev *dev)
 static void
 pci_parse_slot_usage(char *aopt)
 {
-	fprintf(stderr, "Invalid PCI slot info field \"%s\"\n", aopt);
+	pr_err("Invalid PCI slot info field \"%s\"\n", aopt);
 }
 
 int
@@ -465,10 +555,9 @@ pci_emul_mem_handler(struct vmctx *ctx, int vcpu, int dir, uint64_t addr,
 	return 0;
 }
 
-
 static int
 pci_emul_alloc_resource(uint64_t *baseptr, uint64_t limit, uint64_t size,
-			uint64_t *addr)
+                    uint64_t *addr, int bar_type)
 {
 	uint64_t base;
 
@@ -478,6 +567,14 @@ pci_emul_alloc_resource(uint64_t *baseptr, uint64_t limit, uint64_t size,
 	}
 
 	base = roundup2(*baseptr, size);
+
+	/* TODO:Currently, we only reserve gvt mmio regions,
+	 * so ignore PCIBAR_IO when adjust_bar_region.
+	 * If other devices also use reserved bar regions later,
+	 * need remove pcibar_type != PCIBAR_IO condition
+	 */
+	if(bar_type != PCIBAR_IO)
+		adjust_bar_region(&base, size, bar_type);
 
 	if (base + size <= limit) {
 		*addr = base;
@@ -505,20 +602,11 @@ modify_bar_registration(struct pci_vdev *dev, int idx, int registration)
 	struct inout_port iop;
 	struct mem_range mr;
 
-	if (is_pci_gvt(dev)) {
-		/* GVT device is the only one who traps the pci bar access and
-		 * intercepts the corresponding contents in kernel. It needs
-		 * register pci resource only, but no need to register the
-		 * region.
-		 *
-		 * FIXME: This is a short term solution. This patch will be
-		 * obsoleted with the migration of using OVMF to do bar
-		 * addressing and generate ACPI PCI resource from using
-		 * acrn-dm.
-		 */
-		printf("modify_bar_registration: bypass for pci-gvt\n");
+	if (is_pt_pci(dev)) {
+		printf("%s: bypass for pci-passthru %x:%x.%x\n", __func__, dev->bus, dev->slot, dev->func);
 		return 0;
 	}
+
 	switch (dev->bar[idx].type) {
 	case PCIBAR_IO:
 		bzero(&iop, sizeof(struct inout_port));
@@ -562,10 +650,10 @@ unregister_bar(struct pci_vdev *dev, int idx)
 	modify_bar_registration(dev, idx, 0);
 }
 
-static void
+static int
 register_bar(struct pci_vdev *dev, int idx)
 {
-	modify_bar_registration(dev, idx, 1);
+	return modify_bar_registration(dev, idx, 1);
 }
 
 /* Are we decoding i/o port accesses for the emulated pci device? */
@@ -601,7 +689,6 @@ update_bar_address(struct vmctx *ctx, struct pci_vdev *dev, uint64_t addr,
 	int idx, int type, bool ignore_reg_unreg)
 {
 	bool decode = false;
-	uint64_t orig_addr = dev->bar[idx].addr;
 
 	if (!ignore_reg_unreg) {
 		if (dev->bar[idx].type == PCIBAR_IO)
@@ -612,6 +699,19 @@ update_bar_address(struct vmctx *ctx, struct pci_vdev *dev, uint64_t addr,
 
 	if (decode)
 		unregister_bar(dev, idx);
+
+	/* TODO:Currently, we only reserve gvt mmio regions,
+	 * so ignore PCIBAR_IO when adjust_bar_region_with_reserved_bars.
+	 * If other devices also use reserved bar regions later,
+	 * need remove pcibar_type != PCIBAR_IO condition
+	 */
+	if(type != PCIBAR_IO && ctx->gvt_enabled)
+		/* uos kernel may update gvt bars' value,
+		 * but ACRN-DM doesn't know this update.
+		 * When other pci devices write bar address,
+		 * ACRN-DM need update vgpu bars' info.
+		 */
+		ctx->update_gvt_bar(ctx);
 
 	switch (type) {
 	case PCIBAR_IO:
@@ -633,10 +733,21 @@ update_bar_address(struct vmctx *ctx, struct pci_vdev *dev, uint64_t addr,
 
 	if (decode)
 		register_bar(dev, idx);
+}
 
-	/* update bar mapping */
-	if (dev->dev_ops->vdev_update_bar_map && decode)
-		dev->dev_ops->vdev_update_bar_map(ctx, dev, idx, orig_addr);
+static struct mmio_rsvd_rgn *
+get_mmio_rsvd_rgn_by_vdev_idx(struct pci_vdev *pdi, int idx)
+{
+	int i;
+
+	for(i = 0; i < REGION_NUMS; i++){
+		if(reserved_bar_regions[i].vdev &&
+			reserved_bar_regions[i].idx == idx &&
+			reserved_bar_regions[i].vdev == pdi)
+			return &reserved_bar_regions[i];
+	}
+
+	return NULL;
 }
 
 int
@@ -645,6 +756,7 @@ pci_emul_alloc_pbar(struct pci_vdev *pdi, int idx, uint64_t hostbase,
 {
 	int error;
 	uint64_t *baseptr, limit, addr, mask, lobits, bar;
+	struct mmio_rsvd_rgn *region;
 
 	if ((size & (size - 1)) != 0)
 		size = 1UL << flsl(size);	/* round up to a power of 2 */
@@ -713,8 +825,12 @@ pci_emul_alloc_pbar(struct pci_vdev *pdi, int idx, uint64_t hostbase,
 		return -1;
 	}
 
-	if (baseptr != NULL) {
-		error = pci_emul_alloc_resource(baseptr, limit, size, &addr);
+	region = get_mmio_rsvd_rgn_by_vdev_idx(pdi, idx);
+	if(region)
+		addr = region->start;
+
+	if (baseptr != NULL && !region) {
+		error = pci_emul_alloc_resource(baseptr, limit, size, &addr, type);
 		if (error != 0)
 			return error;
 	}
@@ -732,35 +848,54 @@ pci_emul_alloc_pbar(struct pci_vdev *pdi, int idx, uint64_t hostbase,
 		pci_set_cfgdata32(pdi, PCIR_BAR(idx + 1), bar >> 32);
 	}
 
-	register_bar(pdi, idx);
+	error = register_bar(pdi, idx);
+
+	if(error != 0){
+		/* FIXME: Currently, only gvt needs reserve regions.
+		 * because gvt isn't firstly initialized, previous pci
+		 * devices' bars may conflict with gvt bars.
+		 * Use register_bar to detect this case,
+		 * but this case rarely happen.
+		 * If this case always happens, we need to
+		 * change core.c code to ensure gvt firstly initialzed
+		 */
+		printf("%s failed to register_bar\n", pdi->name);
+		return error;
+	}
 
 	return 0;
+}
+
+void
+pci_emul_free_bar(struct pci_vdev *pdi, int idx)
+{
+	bool enabled;
+
+	if ((pdi->bar[idx].type != PCIBAR_NONE) &&
+		(pdi->bar[idx].type != PCIBAR_MEMHI64)){
+		/*
+		 * Check whether the bar is enabled or not,
+		 * if it is disabled then it should have been
+		 * unregistered in pci_emul_cmdsts_write.
+		 */
+		if (pdi->bar[idx].type == PCIBAR_IO)
+			enabled = porten(pdi);
+		else
+			enabled = memen(pdi);
+
+		if (enabled)
+			unregister_bar(pdi, idx);
+		pdi->bar[idx].type = PCIBAR_NONE;
+	}
 }
 
 void
 pci_emul_free_bars(struct pci_vdev *pdi)
 {
 	int i;
-	bool enabled;
 
-	for (i = 0; i < PCI_BARMAX; i++) {
-		if ((pdi->bar[i].type != PCIBAR_NONE) &&
-			(pdi->bar[i].type != PCIBAR_MEMHI64)){
-			/*
-			 * Check whether the bar is enabled or not,
-			 * if it is disabled then it should have been
-			 * unregistered in pci_emul_cmdsts_write.
-			 */
-			if (pdi->bar[i].type == PCIBAR_IO)
-				enabled = porten(pdi);
-			else
-				enabled = memen(pdi);
-
-			if (enabled)
-				unregister_bar(pdi, i);
-			pdi->bar[i].type = PCIBAR_NONE;
-		}
-	}
+	for (i = 0; i < PCI_BARMAX; i++)
+		pci_emul_free_bar(pdi, i);
 }
 
 #define	CAP_START_OFFSET	0x40
@@ -863,7 +998,7 @@ pci_emul_init(struct vmctx *ctx, struct pci_vdev_ops *ops, int bus, int slot,
 
 	pdi = calloc(1, sizeof(struct pci_vdev));
 	if (!pdi) {
-		fprintf(stderr, "%s: calloc returns NULL\n", __func__);
+		pr_err("%s: calloc returns NULL\n", __func__);
 		return -1;
 	}
 
@@ -1241,9 +1376,10 @@ init_pci(struct vmctx *ctx)
 	struct slotinfo *si;
 	struct funcinfo *fi;
 	size_t lowmem;
-	int bus, slot, func;
+	int bus, slot, func, i;
 	int success_cnt = 0;
 	int error;
+	uint64_t bus0_memlimit;
 
 	pci_emul_iobase = PCI_EMUL_IOBASE;
 	pci_emul_membase32 = vm_get_lowmem_limit(ctx);
@@ -1304,6 +1440,23 @@ init_pci(struct vmctx *ctx)
 		    BUSMEM_ROUNDUP);
 		bi->memlimit64 = pci_emul_membase64;
 	}
+
+	/* TODO: gvt PCI bar0 and bar2 aren't allocated by ACRN DM,
+	 * here, need update bus0 memlimit32 value.
+	 * Currently, we only deal with bus0 memlimit32.
+	 * If other PCI devices also use reserved regions,
+	 * need to change these code.
+	 */
+	bi = pci_businfo[0];
+	bus0_memlimit = bi->memlimit32;
+	for(i = 0; i < REGION_NUMS; i++){
+		if(reserved_bar_regions[i].vdev &&
+		  reserved_bar_regions[i].bar_type == PCIBAR_MEM32){
+			bus0_memlimit = (bus0_memlimit > (reserved_bar_regions[i].end + 1))
+				        ? bus0_memlimit : (reserved_bar_regions[i].end + 1);
+		}
+	}
+	bi->memlimit32 = bus0_memlimit;
 
 	error = check_gsi_sharing_violation();
 	if (error < 0)
@@ -2083,6 +2236,7 @@ pci_cfgrw(struct vmctx *ctx, int vcpu, int in, int bus, int slot, int func,
 	int idx, needcfg;
 	uint64_t addr, bar, mask;
 	bool decode, ignore_reg_unreg = false;
+	uint8_t mmio_bar_prop;
 
 	bi = pci_businfo[bus];
 	if (bi != NULL) {
@@ -2189,6 +2343,11 @@ pci_cfgrw(struct vmctx *ctx, int vcpu, int in, int bus, int slot, int func,
 				}
 			}
 
+			/* save the bar property for MMIO pci bar. */
+			mmio_bar_prop = pci_get_cfgdata32(dev, PCIR_BAR(idx)) &
+						(PCIM_BAR_SPACE | PCIM_BAR_MEM_TYPE |
+						PCIM_BAR_MEM_PREFETCH);
+
 			switch (dev->bar[idx].type) {
 			case PCIBAR_NONE:
 				dev->bar[idx].addr = bar = 0;
@@ -2208,7 +2367,8 @@ pci_cfgrw(struct vmctx *ctx, int vcpu, int in, int bus, int slot, int func,
 				break;
 			case PCIBAR_MEM32:
 				addr = bar = *eax & mask;
-				bar |= PCIM_BAR_MEM_SPACE | PCIM_BAR_MEM_32;
+				/* Restore the readonly fields for mmio bar */
+				bar |= mmio_bar_prop;
 				if (addr != dev->bar[idx].addr) {
 					update_bar_address(ctx, dev, addr, idx,
 							   PCIBAR_MEM32,
@@ -2217,8 +2377,8 @@ pci_cfgrw(struct vmctx *ctx, int vcpu, int in, int bus, int slot, int func,
 				break;
 			case PCIBAR_MEM64:
 				addr = bar = *eax & mask;
-				bar |= PCIM_BAR_MEM_SPACE | PCIM_BAR_MEM_64 |
-				       PCIM_BAR_MEM_PREFETCH;
+				/* Restore the readonly fields for mmio bar */
+				bar |= mmio_bar_prop;
 				if (addr != (uint32_t)dev->bar[idx].addr) {
 					update_bar_address(ctx, dev, addr, idx,
 							   PCIBAR_MEM64,
@@ -2252,64 +2412,6 @@ pci_cfgrw(struct vmctx *ctx, int vcpu, int in, int bus, int slot, int func,
 		}
 	}
 }
-
-static int cfgenable, cfgbus, cfgslot, cfgfunc, cfgoff;
-
-static int
-pci_emul_cfgaddr(struct vmctx *ctx, int vcpu, int in, int port, int bytes,
-		 uint32_t *eax, void *arg)
-{
-	uint32_t x;
-
-	if (bytes != 4) {
-		if (in)
-			*eax = (bytes == 2) ? 0xffff : 0xff;
-		return 0;
-	}
-
-	if (in) {
-		x = (cfgbus << 16) | (cfgslot << 11) | (cfgfunc << 8) | cfgoff;
-		if (cfgenable)
-			x |= CONF1_ENABLE;
-		*eax = x;
-	} else {
-		x = *eax;
-		cfgenable = (x & CONF1_ENABLE) == CONF1_ENABLE;
-		cfgoff = x & PCI_REGMAX;
-		cfgfunc = (x >> 8) & PCI_FUNCMAX;
-		cfgslot = (x >> 11) & PCI_SLOTMAX;
-		cfgbus = (x >> 16) & PCI_BUSMAX;
-	}
-
-	return 0;
-}
-INOUT_PORT(pci_cfgaddr, CONF1_ADDR_PORT, IOPORT_F_INOUT, pci_emul_cfgaddr);
-
-static int
-pci_emul_cfgdata(struct vmctx *ctx, int vcpu, int in, int port, int bytes,
-		 uint32_t *eax, void *arg)
-{
-	int coff;
-
-	if ((bytes != 1) && (bytes != 2) && (bytes != 4))
-		return -1;
-
-	coff = cfgoff + (port - CONF1_DATA_PORT);
-	if (cfgenable) {
-		pci_cfgrw(ctx, vcpu, in, cfgbus, cfgslot, cfgfunc, coff, bytes,
-		    eax);
-	} else {
-		/* Ignore accesses to cfgdata if not enabled by cfgaddr */
-		if (in)
-			*eax = 0xffffffff;
-	}
-	return 0;
-}
-
-INOUT_PORT(pci_cfgdata, CONF1_DATA_PORT+0, IOPORT_F_INOUT, pci_emul_cfgdata);
-INOUT_PORT(pci_cfgdata, CONF1_DATA_PORT+1, IOPORT_F_INOUT, pci_emul_cfgdata);
-INOUT_PORT(pci_cfgdata, CONF1_DATA_PORT+2, IOPORT_F_INOUT, pci_emul_cfgdata);
-INOUT_PORT(pci_cfgdata, CONF1_DATA_PORT+3, IOPORT_F_INOUT, pci_emul_cfgdata);
 
 int
 emulate_pci_cfgrw(struct vmctx *ctx, int vcpu, int in, int bus, int slot,
@@ -2364,7 +2466,7 @@ pci_emul_diow(struct vmctx *ctx, int vcpu, struct pci_vdev *dev, int baridx,
 
 	if (baridx == 0) {
 		if (offset + size > DIOSZ) {
-			printf("diow: iow too large, offset %ld size %d\n",
+			pr_err("diow: iow too large, offset %ld size %d\n",
 			       offset, size);
 			return;
 		}
@@ -2377,7 +2479,7 @@ pci_emul_diow(struct vmctx *ctx, int vcpu, struct pci_vdev *dev, int baridx,
 		else if (size == 4)
 			*(uint32_t *)offset = value;
 		else
-			printf("diow: iow unknown size %d\n", size);
+			pr_err("diow: iow unknown size %d\n", size);
 
 		/*
 		 * Special magic value to generate an interrupt
@@ -2393,7 +2495,7 @@ pci_emul_diow(struct vmctx *ctx, int vcpu, struct pci_vdev *dev, int baridx,
 
 	if (baridx == 1 || baridx == 2) {
 		if (offset + size > DMEMSZ) {
-			printf("diow: memw too large, offset %ld size %d\n",
+			pr_err("diow: memw too large, offset %ld size %d\n",
 			       offset, size);
 			return;
 		}
@@ -2410,7 +2512,7 @@ pci_emul_diow(struct vmctx *ctx, int vcpu, struct pci_vdev *dev, int baridx,
 		else if (size == 8)
 			*(uint64_t *)offset_ptr = value;
 		else
-			printf("diow: memw unknown size %d\n", size);
+			pr_err("diow: memw unknown size %d\n", size);
 
 		/*
 		 * magic interrupt ??
@@ -2418,7 +2520,7 @@ pci_emul_diow(struct vmctx *ctx, int vcpu, struct pci_vdev *dev, int baridx,
 	}
 
 	if (baridx > 2 || baridx < 0)
-		printf("diow: unknown bar idx %d\n", baridx);
+		pr_err("diow: unknown bar idx %d\n", baridx);
 }
 
 static uint64_t
@@ -2432,7 +2534,7 @@ pci_emul_dior(struct vmctx *ctx, int vcpu, struct pci_vdev *dev, int baridx,
 
 	if (baridx == 0) {
 		if (offset + size > DIOSZ) {
-			printf("dior: ior too large, offset %ld size %d\n",
+			pr_err("dior: ior too large, offset %ld size %d\n",
 			       offset, size);
 			return 0;
 		}
@@ -2446,12 +2548,12 @@ pci_emul_dior(struct vmctx *ctx, int vcpu, struct pci_vdev *dev, int baridx,
 		else if (size == 4)
 			value = *(uint32_t *)offset_ptr;
 		else
-			printf("dior: ior unknown size %d\n", size);
+			pr_err("dior: ior unknown size %d\n", size);
 	}
 
 	if (baridx == 1 || baridx == 2) {
 		if (offset + size > DMEMSZ) {
-			printf("dior: memr too large, offset %ld size %d\n",
+			pr_err("dior: memr too large, offset %ld size %d\n",
 			       offset, size);
 			return 0;
 		}
@@ -2468,12 +2570,12 @@ pci_emul_dior(struct vmctx *ctx, int vcpu, struct pci_vdev *dev, int baridx,
 		else if (size == 8)
 			value = *(uint64_t *)offset_ptr;
 		else
-			printf("dior: ior unknown size %d\n", size);
+			pr_err("dior: ior unknown size %d\n", size);
 	}
 
 
 	if (baridx > 2 || baridx < 0) {
-		printf("dior: unknown bar idx %d\n", baridx);
+		pr_err("dior: unknown bar idx %d\n", baridx);
 		return 0;
 	}
 
@@ -2490,12 +2592,14 @@ pci_get_vdev_info(int slot)
 	bi = pci_businfo[0];
 	if (bi == NULL)
 		return NULL;
+	if (slot < 0 || slot >= MAXSLOTS)
+		return NULL;
 
 	si = &bi->slotinfo[slot];
 	if (si != NULL)
 		dev = si->si_funcs[0].fi_devi;
 	else
-		fprintf(stderr, "slot=%d is empty!\n", slot);
+		pr_err("slot=%d is empty!\n", slot);
 
 	return dev;
 }

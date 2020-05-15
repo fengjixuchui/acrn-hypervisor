@@ -12,9 +12,17 @@
 # Default/global reviewers (if not overridden later)
 *                                        @anthonyzxu @dongyaozu
 
+Makefile                                 @binbinwu1
 /hypervisor/                             @anthonyzxu @dongyaozu
-/devicemodel/                            @anthonyzxu @dongyaozu
-/doc/                                    @dbkinder @deb-intel
-/tools/acrn-crashlog/                    @dizhang417 @chengangc
+/devicemodel/                            @anthonyzxu @ywan170
+/doc/                                    @dbkinder @deb-intel @NanlinXie
+/misc/tools/acrn-crashlog/               @chengangc @dizhang417 
+/misc/tools/acrnlog/                     @lyan3
+/misc/tools/acrntrace/                   @lyan3
+/misc/acrn-manager/                      @lyan3
+/misc/acrnbridge/                        @lyan3
+/misc/acrn-config/                       @binbinwu1
+/misc/Makefile                           @binbinwu1
+/misc/efi-stub/                          @jren1
 
-*.rst                                    @dbkinder @deb-intel
+*.rst                                    @dbkinder @deb-intel @NanlinXie

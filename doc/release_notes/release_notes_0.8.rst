@@ -30,8 +30,8 @@ with a specific release: generated v0.8 documents can be found at
 https://projectacrn.github.io/0.8/.  Documentation for the latest
 (master) branch is found at https://projectacrn.github.io/latest/.
 
-ACRN v0.8 requires Clear Linux OS version 28600 or newer.  Please follow the
-instructions in the :ref:`getting-started-apl-nuc`.
+ACRN v0.8 requires Clear Linux OS version 28600. Please follow the
+instructions in the :ref:`kbl-nuc-sdc`.
 
 Version 0.8 new features
 ************************
@@ -63,7 +63,7 @@ Document updates
 Several new documents have been added in this release, including:
 
 * :ref:`Zephyr RTOS as Guest OS <using_zephyr_as_uos>`
-* :ref:`Enable cache QoS with CAT <using_cat_up2>`
+* :ref:`Enable cache QoS with CAT <rdt_configuration>`
 * :ref:`ACRN kernel parameter introduction <kernel-parameters>`
 * :ref:`faq` update for two issues
 * :ref:`ACRN Debug introduction <acrn-debug>`

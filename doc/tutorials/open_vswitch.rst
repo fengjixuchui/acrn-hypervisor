@@ -1,7 +1,7 @@
 .. _open_vswitch:
 
-How to enable OVS in ACRN
-#########################
+Enable OVS in ACRN
+##################
 Hypervisors need the ability to bridge network traffic between VMs
 and with the outside world. This tutorial describes how to
 use `Open Virtual Switch (OVS)
@@ -9,7 +9,7 @@ use `Open Virtual Switch (OVS)
 
 .. note::
    OVS is provided as part of the ``service-os``
-   bundle.  Use ClearLinux OS version ``29660`` or higher.
+   bundle.  Use ClearLinux OS version ``29660``.
 
 What is OVS
 ***********

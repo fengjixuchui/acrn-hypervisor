@@ -31,8 +31,8 @@ or use Git clone and checkout commands::
 The project's online technical documentation is also tagged to correspond
 with a specific release: generated v1.0 documents can be found at https://projectacrn.github.io/1.0/.
 Documentation for the latest (master) branch is found at https://projectacrn.github.io/latest/.
-ACRN v1.0 requires Clear Linux* OS version 29070 or newer. Please follow the
-instructions in the :ref:`getting-started-apl-nuc`.
+ACRN v1.0 requires Clear Linux* OS version 29070. Please follow the
+instructions in the :ref:`kbl-nuc-sdc`.
 
 Version 1.0 major features
 **************************
@@ -56,8 +56,7 @@ Enable post-launched RTVM support for real-time UOS in ACRN
 ===========================================================
 This release provides initial patches enabling a User OS (UOS) running as a
 virtual machine (VM) with real-time characteristics,
-also called a "post-launched RTVM". We've published a tutorial
-:ref:`rt_linux_setup`. More patches for ACRN real time support will continue.
+also called a "post-launched RTVM". More patches for ACRN real time support will continue.
 
 Enable cache QOS with CAT
 =========================
@@ -196,7 +195,7 @@ modified to map native GPIO to UOS. (See :ref:`virtio-hld` for more information.
 New ACRN tools
 ==============
 We've added a collection of support tools including ``acrnctl``, ``acrntrace``, ``acrnlog``,
-``acrn-crashlog``, ``acrnprobe``. (See :ref:`tools` for details.)
+``acrn-crashlog``, ``acrnprobe``. (See the `Tools` section under **User Guides** for details.)
 
 Document updates
 ================
@@ -206,7 +205,7 @@ We have many reference documents `available
 * :ref:`GPU Passthrough on Skylake NUC <skl-nuc-gpu-passthrough>`
 * :ref:`Device Model Parameters <acrn-dm_parameters>`
 * :ref:`Running Automotive Grade Linux as a VM <agl-vms>`
-* :ref:`Using PREEMPT_RT-Linux for real-time UOS <rt_linux_setup>`
+* Using PREEMPT_RT-Linux for real-time UOS
 * :ref:`Frequently Asked Questions <faq>`
 * :ref:`An introduction to Trusty and Security services on ACRN <trusty-security-services>`
 * A Wiki article about `Porting Clear Linux/ACRN to support Yocto Project/ACRN
@@ -222,7 +221,7 @@ We have many reference documents `available
 * Additional project `coding guidelines
   <coding_guidelines.html>`_
 * :ref:`Zephyr RTOS as Guest OS <using_zephyr_as_uos>`
-* :ref:`Enable cache QoS with CAT <using_cat_up2>`
+* :ref:`Enable cache QoS with CAT <rdt_configuration>`
 * :ref:`ACRN kernel parameter introduction <kernel-parameters>`
 * :ref:`FAQ update for two issues <faq>`
 * :ref:`ACRN Debug introduction <acrn-debug>`

@@ -50,7 +50,7 @@ static inline void update_physical_timer(struct per_cpu_timers *cpu_timer)
 
 	/* find the next event timer */
 	if (!list_empty(&cpu_timer->timer_list)) {
-		timer = list_entry((&cpu_timer->timer_list)->next,
+		timer = container_of((&cpu_timer->timer_list)->next,
 			struct hv_timer, node);
 
 		/* it is okay to program a expired time */
@@ -70,7 +70,7 @@ static bool local_add_timer(struct per_cpu_timers *cpu_timer,
 
 	prev = &cpu_timer->timer_list;
 	list_for_each(pos, &cpu_timer->timer_list) {
-		tmp = list_entry(pos, struct hv_timer, node);
+		tmp = container_of(pos, struct hv_timer, node);
 		if (tmp->fire_tsc < tsc) {
 			prev = &tmp->node;
 		}
@@ -141,7 +141,7 @@ static void init_tsc_deadline_timer(void)
 {
 	uint32_t val;
 
-	val = VECTOR_TIMER;
+	val = TIMER_VECTOR;
 	val |= APIC_LVTT_TM_TSCDLT; /* TSC deadline and unmask */
 	msr_write(MSR_IA32_EXT_APIC_LVT_TIMER, val);
 	cpu_memory_barrier();
@@ -168,7 +168,7 @@ static void timer_softirq(uint16_t pcpu_id)
 	 * already passed due to previously func()'s delay.
 	 */
 	list_for_each_safe(pos, n, &cpu_timer->timer_list) {
-		timer = list_entry(pos, struct hv_timer, node);
+		timer = container_of(pos, struct hv_timer, node);
 		/* timer expried */
 		tries--;
 		if ((timer->fire_tsc <= current_tsc) && (tries != 0U)) {
@@ -197,7 +197,7 @@ void timer_init(void)
 
 	init_percpu_timer(pcpu_id);
 
-	if (pcpu_id == BOOT_CPU_ID) {
+	if (pcpu_id == BSP_CPU_ID) {
 		register_softirq(SOFTIRQ_TIMER, timer_softirq);
 
 		retval = request_irq(TIMER_IRQ, (irq_action_t)tsc_deadline_handler, NULL, IRQF_NONE);
@@ -272,7 +272,7 @@ static uint64_t native_calibrate_tsc(void)
 	if (cpu_info->cpuid_level >= 0x15U) {
 		uint32_t eax_denominator, ebx_numerator, ecx_hz, reserved;
 
-		cpuid(0x15U, &eax_denominator, &ebx_numerator,
+		cpuid_subleaf(0x15U, 0x0U, &eax_denominator, &ebx_numerator,
 			&ecx_hz, &reserved);
 
 		if ((eax_denominator != 0U) && (ebx_numerator != 0U)) {
@@ -283,7 +283,7 @@ static uint64_t native_calibrate_tsc(void)
 
 	if ((tsc_hz == 0UL) && (cpu_info->cpuid_level >= 0x16U)) {
 		uint32_t eax_base_mhz, ebx_max_mhz, ecx_bus_mhz, edx;
-		cpuid(0x16U, &eax_base_mhz, &ebx_max_mhz, &ecx_bus_mhz, &edx);
+		cpuid_subleaf(0x16U, 0x0U, &eax_base_mhz, &ebx_max_mhz, &ecx_bus_mhz, &edx);
 		tsc_hz = (uint64_t) eax_base_mhz * 1000000U;
 	}
 
@@ -318,7 +318,13 @@ uint64_t us_to_ticks(uint32_t us)
 
 uint64_t ticks_to_us(uint64_t ticks)
 {
-	return (ticks * 1000UL) / (uint64_t)tsc_khz;
+	uint64_t us = 0UL;
+
+	if (tsc_khz != 0U ) {
+		us = (ticks * 1000UL) / (uint64_t)tsc_khz;
+	}
+
+	return us;
 }
 
 uint64_t ticks_to_ms(uint64_t ticks)

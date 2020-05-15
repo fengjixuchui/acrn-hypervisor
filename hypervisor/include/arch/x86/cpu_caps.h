@@ -22,8 +22,14 @@
 #define	FEAT_7_0_EDX		4U     /* CPUID[EAX=7,ECX=0].EDX */
 #define	FEAT_8000_0001_ECX	5U     /* CPUID[8000_0001].ECX */
 #define	FEAT_8000_0001_EDX	6U     /* CPUID[8000_0001].EDX */
-#define	FEAT_8000_0008_EBX	7U     /* CPUID[8000_0008].EAX */
-#define	FEATURE_WORDS		8U
+#define	FEAT_8000_0007_EDX	7U     /* CPUID[8000_0007].EDX */
+#define	FEAT_8000_0008_EBX	8U     /* CPUID[8000_0008].EBX */
+#define	FEAT_D_0_EAX		9U     /* CPUID[D][0].EAX */
+#define	FEAT_D_0_EDX		10U    /* CPUID[D][0].EDX */
+#define	FEAT_D_1_EAX		11U    /* CPUID[D][1].EAX */
+#define	FEAT_D_1_ECX		13U    /* CPUID[D][1].ECX */
+#define	FEAT_D_1_EDX		14U    /* CPUID[D][1].EDX */
+#define	FEATURE_WORDS		15U
 
 struct cpuinfo_x86 {
 	uint8_t family, model;
@@ -42,6 +48,8 @@ bool is_apicv_advanced_feature_supported(void);
 bool pcpu_has_cap(uint32_t bit);
 bool pcpu_has_vmx_ept_cap(uint32_t bit_mask);
 bool pcpu_has_vmx_vpid_cap(uint32_t bit_mask);
+bool is_apl_platform(void);
+bool has_core_cap(uint32_t bit_mask);
 void init_pcpu_capabilities(void);
 void init_pcpu_model_name(void);
 int32_t detect_hardware_support(void);

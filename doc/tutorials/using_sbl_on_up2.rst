@@ -1,10 +1,10 @@
 .. _using-sbl-up2:
 
-Using SBL on UP2 Board
-######################
+Enable SBL on the UP2 Board
+###########################
 
-This document builds on the :ref:`getting-started-up2`, and explains how to use
-SBL instead of UEFI to boot UP2 board.
+This document builds on :ref:`getting-started-up2`, and explains how to use
+SBL instead of UEFI to boot the UP2 board.
 
 Slim Bootloader is an open-source boot firmware solution,
 built from the ground up to be secure, lightweight, and highly
@@ -56,13 +56,13 @@ BIOS binary file ``<SBL_IFWI_IMAGE>``, which is the new IFWI image with SBL in B
 Flash SBL on the UP2
 ********************
 
-#. Download the appropriate BIOS update for `UP2 Board <https://downloads.up-community.org/download/up-board-uefi-bios-upc1dm15/>`_.
+#. Download the appropriate BIOS update for `UP2 Board <https://downloads.up-community.org>`_.
 #. Put the empty USB flash drive in your PC and format it as FAT32.
 #. Decompress the BIOS zip file into the formatted drive.
 #. Attach the USB disk and keyboard to the board and power it on.
 #. During boot, press :kbd:`F7` on the keyboard to enter the UEFI BIOS boot menu.
 #. Navigate through the following menus and select ``Built-in EFI shell``.
-#. Please take note of which filesystem number ``fs*`` your USB drive is mapped to.
+#. Please take note to which filesystem number ``fs*`` your USB drive is mapped.
 #. Switch to that filesystem, e.g. ``fs1:``.  (Don't forget the colon.)
 #. Navigate to the path where you decompressed the update (the ``cd`` and ``ls`` commands are available here, as if in an Unix shell).
 
@@ -73,7 +73,7 @@ Flash SBL on the UP2
 Build ACRN for UP2
 ******************
 
-In Clear Linux, build out the SOS and LaaG image with these two files:
+In Clear Linux, build out the Service VM and LaaG image with these two files:
 
 * create-up2-images.sh
 
@@ -95,45 +95,42 @@ An example of the configuration file ``uos.json``:
                              { "disk" : "clearlinux.img", "partition" : 2, "type" : "ext4" } ],
        "PartitionMountPoints" : [ { "disk" : "clearlinux.img", "partition" : 1, "mount" : "/boot" },
            		          { "disk" : "clearlinux.img", "partition" : 2, "mount" : "/" } ],
-       "Version": 30690,
+       "Version": 31030,
        "Bundles": ["kernel-iot-lts2018", "openssh-server", "x11-server", "os-core", "os-core-update"]
    }
 
 .. note::
-   To generate the image with a specified version, please modify
+   To generate the image with a specified version, modify
    the "Version" argument, ``"Version": 3****`` instead
-   of ``"Version": 30690`` for example.
+   of ``"Version": 31030`` for example.
 
 
-Build SOS and LaaG image:
+Build Service VM and LaaG image:
 
 .. code-block:: none
 
    $ sudo -s
    # chmod +x create-up2-images.sh
-   # ./create-up2-images.sh --images-type all --clearlinux-version 30690 --laag-json uos.json
+   # ./create-up2-images.sh --images-type all --clearlinux-version 31030 --laag-json uos.json
 
 .. note::
    You must have root privileges to run ``create-up2-images.sh``.
 
-.. note::
    If you want to build with your own ``acrn-hypervisor``, add the ``--acrn-code-path``
-   argument specifying the directory where your ``acrn-hypervisor`` is found.
+   argument that specifies the directory where your ``acrn-hypervisor`` is found.
 
-.. note::
-   When building images, you can modify the ``--clearlinux-version`` argument
-   to a specific version (such as 30690). To generate the images of SOS only,
+   When building images, modify the ``--clearlinux-version`` argument
+   to a specific version (such as 31030). To generate the images of Service VM only,
    modify the ``--images-type`` argument to ``sos``.
 
-This step will generate the images of SOS and LaaG:
+This step will generate the images of Service VM and LaaG:
 
 * sos_boot.img
 * sos_rootfs.img
 * up2_laag.img
 
-Build the binary image ``partition_desc.bin`` for
-GPT partitions, and change the partition layout
-in ``partition_desc.ini`` if needed.
+Build the binary image ``partition_desc.bin`` for GPT partitions and change
+the partition layout in ``partition_desc.ini`` if needed.
 
 .. code-block:: none
 
@@ -147,28 +144,28 @@ which is also in the directory ``~/acrn-hypervisor/doc/tutorials/``.
 .. table::
       :widths: auto
 
-      +------------------------------+---------------------------------------------------+
-      | Filename                     | Description                                       |
-      +==============================+===================================================+
-      | sos_boot.img                 | This SOS image contains the ACRN hypervisor and   |
-      |                              | SOS kernel.                                       |
-      +------------------------------+---------------------------------------------------+
-      | sos_rootfs.img               | This is the root filesystem image for the SOS. it |
-      |                              | contains the Device Models implementation and     |
-      |                              | SOS user space.                                   |
-      +------------------------------+---------------------------------------------------+
-      | partition_desc.bin           | This is the binary image for GPT partitions       |
-      +------------------------------+---------------------------------------------------+
-      | up2_laag.img                 | This is the root filesystem image for the SOS.    |
-      |                              | It has an integrated kernel and userspace.        |
-      +------------------------------+---------------------------------------------------+
-      | flash_LaaG.json              | Configuration file for Intel Platform Flash Tool  |
-      |                              | to flash SOS image + hypervisor/SOS boot image +  |
-      |                              | SOS userland                                      |
-      +------------------------------+---------------------------------------------------+
+      +------------------------------+----------------------------------------------------------+
+      | Filename                     | Description                                              |
+      +==============================+==========================================================+
+      | sos_boot.img                 | This Service VM image contains the ACRN hypervisor and   |
+      |                              | Service VM kernel.                                       |
+      +------------------------------+----------------------------------------------------------+
+      | sos_rootfs.img               | This is the root filesystem image for the Service VM. it |
+      |                              | contains the Device Models implementation and            |
+      |                              | Service VM user space.                                   |
+      +------------------------------+----------------------------------------------------------+
+      | partition_desc.bin           | This is the binary image for GPT partitions              |
+      +------------------------------+----------------------------------------------------------+
+      | up2_laag.img                 | This is the root filesystem image for the Service VM.    |
+      |                              | It has an integrated kernel and userspace.               |
+      +------------------------------+----------------------------------------------------------+
+      | flash_LaaG.json              | Configuration file for Intel Platform Flash Tool         |
+      |                              | to flash Service VM image + hypervisor/Service VM        |
+      |                              | boot image + Service VM userland                         |
+      +------------------------------+----------------------------------------------------------+
 
 .. note::
-   In this step, please build SOS and LaaG images in Clear Linux rather than Ubuntu.
+   In this step, build Service VM and LaaG images in Clear Linux rather than Ubuntu.
 
 Download and install flash tool
 *******************************
@@ -176,12 +173,12 @@ Download and install flash tool
 #. Download Intel Platform Flash Tool Lite from
    `<https://github.com/projectceladon/tools/tree/master/platform_flash_tool_lite/latest/>`_.
 
-#. For Ubuntu host, install `platformflashtoollite_5.8.9.0_linux_x86_64.deb
+#. For the Ubuntu host, install `platformflashtoollite_5.8.9.0_linux_x86_64.deb
    <https://github.com/projectceladon/tools/blob/master/platform_flash_tool_lite/latest/platformflashtoollite_5.8.9.0_linux_x86_64.deb>`_
    for example.
 
-SOS and LaaG Installation
-*************************
+Service VM and LaaG Installation
+********************************
 
 #. Connect a USB cable from the debug board to your Ubuntu host machine,
    and run the following command to verify that its USB serial port is
@@ -192,17 +189,17 @@ SOS and LaaG Installation
        $ ls /dev/ttyUSB*
        /dev/ttyUSB0
 
-#. Connect to board via ``minicom``, and use ``/dev/ttyUSB0`` for example:
+#. Connect to the board via ``minicom``, and use ``/dev/ttyUSB0``. For example:
 
    .. code-block:: none
 
        $ sudo minicom -s /dev/ttyUSB0
 
    .. note::
-      Please verify the minicom serial port settings are 115200 8N1 and
+      Verify that the minicom serial port settings are 115200 8N1 and
       both HW and SW flow control are turned off.
 
-#. When you see following console log, please press any key to enter
+#. When the following console log displays, press any key to enter the
    shell command:
 
    .. code-block:: none
@@ -274,25 +271,27 @@ SOS and LaaG Installation
        USB for fastboot transport layer selected
 
 
-#. When UP2 board is in fastboot mode, you should be able
-   see the device in Platform Flash Tool. Select the
+#. When the UP2 board is in fastboot mode, you should be able
+   see the device in the Platform Flash Tool. Select the
    file ``flash_LaaG.json`` and modify ``Configuration``
-   to ``SOS_and_LaaG``. Click ``Start to flash`` to flash images.
+   to ``Service VM_and_LaaG``. Click ``Start to flash`` to flash images.
 
    .. image:: images/platformflashtool_start_to_flash.png
       :align: center
 
-Boot to SOS
-***********
+Boot to Service VM
+******************
+
 After flashing, UP2 board will automatically reboot and
-boot to ACRN hypervisor. And login SOS by following command:
+boot to the ACRN hypervisor. Log in to Service VM by using the following command:
 
 .. image:: images/vm_console_login.png
    :align: center
 
-Launch UOS
-**********
-Run the ``launch_uos.sh`` script to launch the UOS:
+Launch User VM
+**************
+
+Run the ``launch_uos.sh`` script to launch the User VM:
 
 .. code-block:: none
 
@@ -300,4 +299,4 @@ Run the ``launch_uos.sh`` script to launch the UOS:
    $ wget https://raw.githubusercontent.com/projectacrn/acrn-hypervisor/master/doc/tutorials/launch_uos.sh
    $ sudo ./launch_uos.sh -V 1
 
-**Congratulations**, you are now watching the User OS booting up!
+**Congratulations**, you are now watching the User VM booting up!

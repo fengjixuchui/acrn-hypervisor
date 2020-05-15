@@ -56,9 +56,11 @@ static char bootargs[BOOT_ARG_LEN];
  * 2:       0x100000 -  lowmem      RAM             lowmem - 1MB
  * 3:         lowmem -  0x80000000  (reserved)      2GB - lowmem
  * 4:	  0x80000000 -  0x88000000  (reserved)	    128MB
- * 5:     0xE0000000 -  0x100000000 MCFG, MMIO      512MB
- * 6:    0x100000000 -  0x140000000 64-bit PCI hole 1GB
- * 7:    0x140000000 -  highmem     RAM             highmem - 5GB
+ * 5:     0xDB000000 -  0xDF000000  (reserved)      64MB
+ * 6:     0xDF000000 -  0xE0000000  (reserved)      16MB
+ * 7:     0xE0000000 -  0x100000000 MCFG, MMIO      512MB
+ * 8:    0x100000000 -  0x140000000 64-bit PCI hole 1GB
+ * 9:    0x140000000 -  highmem     RAM             highmem - 5GB
  */
 const struct e820_entry e820_default_entries[NUM_E820_ENTRIES] = {
 	{	/* 0 to video memory */
@@ -89,6 +91,29 @@ const struct e820_entry e820_default_entries[NUM_E820_ENTRIES] = {
 		/* reserve for PRM resource */
 		.baseaddr = 0x80000000,
 		.length	  = 0x8000000,
+		.type     = E820_TYPE_RESERVED
+	},
+
+	{
+		/* reserve for GVT-d graphics stolen memory.
+		 * The native BIOS allocates the stolen memory by itself,
+		 * and size can be configured by user itself through BIOS GUI.
+		 * For ACRN, we simply hard code to 64MB and static
+		 * reserved the memory region to avoid more efforts in OVMF,
+		 * and user *must* align the native BIOS setting to 64MB.
+		 *
+		 * GPU_GSM_GPA micro in passthrough.c should
++		 * align with this address here.
+		 */
+		.baseaddr = 0xDB000000,
+		.length	  = 0x4000000,
+		.type     = E820_TYPE_RESERVED
+	},
+
+	{
+		/* reserve for GVT */
+		.baseaddr = 0xDF000000,
+		.length	  = 0x1000000,
 		.type     = E820_TYPE_RESERVED
 	},
 
@@ -140,8 +165,7 @@ check_image(char *path, size_t size_limit, size_t *size)
 	fp = fopen(path, "r");
 
 	if (fp == NULL) {
-		fprintf(stderr,
-			"SW_LOAD ERR: image file failed to open\n");
+		pr_err("SW_LOAD ERR: image file failed to open\n");
 		return -1;
 	}
 
@@ -149,8 +173,7 @@ check_image(char *path, size_t size_limit, size_t *size)
 	len = ftell(fp);
 
 	if (len == 0 || (size_limit && len > size_limit)) {
-		fprintf(stderr,
-			"SW_LOAD ERR: file is %s\n",
+		pr_err("SW_LOAD ERR: file is %s\n",
 			len ? "too large" : "empty");
 		fclose(fp);
 		return -1;
@@ -245,11 +268,11 @@ acrn_create_e820_table(struct vmctx *ctx, struct e820_entry *e820)
 		removed++;
 	}
 
-	printf("SW_LOAD: build e820 %d entries to addr: %p\r\n",
+	pr_info("SW_LOAD: build e820 %d entries to addr: %p\r\n",
 			NUM_E820_ENTRIES - removed, (void *)e820);
 
 	for (k = 0; k < NUM_E820_ENTRIES - removed; k++)
-		printf("SW_LOAD: entry[%d]: addr 0x%016lx, size 0x%016lx, "
+		pr_info("SW_LOAD: entry[%d]: addr 0x%016lx, size 0x%016lx, "
 				" type 0x%x\r\n",
 				k, e820[k].baseaddr,
 				e820[k].length,

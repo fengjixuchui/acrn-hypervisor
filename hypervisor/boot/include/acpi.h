@@ -22,6 +22,13 @@
 #define ACPI_MADT_ENABLED           1U
 #define ACPI_MADT_TYPE_LOCAL_APIC_NMI 4U
 
+#define ACPI_DMAR_TYPE_HARDWARE_UNIT           0U
+#define ACPI_DMAR_TYPE_RESERVED_MEMORY           1U
+#define ACPI_DMAR_TYPE_ROOT_ATS           2U
+#define ACPI_DMAR_TYPE_HARDWARE_AFFINITY           3U
+#define ACPI_DMAR_TYPE_NAMESPACE           4U
+#define ACPI_DMAR_TYPE_RESERVED           5U
+
 /* FACP field offsets */
 #define OFFSET_FACS_ADDR        36U
 #define OFFSET_RESET_REGISTER   116U
@@ -36,13 +43,20 @@
 #define OFFSET_WAKE_VECTOR_32    12U
 #define OFFSET_WAKE_VECTOR_64    24U
 
+/* MCFG field offsets */
+#define OFFSET_MCFG_LENGTH       4U
+#define OFFSET_MCFG_ENTRY0       44U
+#define OFFSET_MCFG_ENTRY0_BASE  44U
+#define OFFSET_MCFG_ENTRY1       60U
+
 #define ACPI_SIG_FADT            "FACP" /* Fixed ACPI Description Table */
 #define ACPI_SIG_FACS             0x53434146U /* "FACS" */
 #define ACPI_SIG_RSDP            "RSD PTR " /* Root System Description Ptr */
 #define ACPI_SIG_XSDT            "XSDT"      /* Extended  System Description Table */
 #define ACPI_SIG_MADT            "APIC" /* Multiple APIC Description Table */
 #define ACPI_SIG_DMAR            "DMAR"
-
+#define ACPI_SIG_MCFG            "MCFG" /* Memory Mapped Configuration table */
+#define ACPI_SIG_DSDT            "DSDT" /* Differentiated System Description Table */
 
 struct packed_gas {
 	uint8_t 	space_id;
@@ -108,6 +122,36 @@ struct acpi_table_xsdt {
 	uint64_t                    table_offset_entry[1];
 } __packed;
 
+struct acpi_table_fadt {
+	struct acpi_table_header header;/* Common ACPI table header */
+	uint32_t facs;			/* 32-bit physical address of FACS */
+	uint32_t dsdt;			/* 32-bit physical address of DSDT */
+	uint8_t unused0[12];		/* ACRN doesn't use these fields */
+	uint32_t pm1a_event_block;	/* 32-bit port address of Power Mgt 1a Event Reg Blk */
+	uint32_t pm1b_event_block;	/* 32-bit port address of Power Mgt 1b Event Reg Blk */
+	uint32_t pm1a_control_block;	/* 32-bit port address of Power Mgt 1a Control Reg Blk */
+	uint32_t pm1b_control_block;	/* 32-bit port address of Power Mgt 1b Control Reg Blk */
+	uint8_t unused1[16];		/* ACRN doesn't use these fields */
+	uint8_t pm1_event_length;	/* Byte Length of ports at pm1x_event_block */
+	uint8_t pm1_control_length;	/* Byte Length of ports at pm1x_control_block */
+	uint8_t unused2[22];		/* ACRN doesn't use these fields */
+	uint32_t flags;			/* Miscellaneous flag bits (see below for individual flags) */
+	uint8_t unused3[128];		/* ACRN doesn't use these fields */
+} __packed;
+
+struct acpi_table_mcfg {
+	struct acpi_table_header header;	/* Common ACPI table header */
+	uint8_t reserved[8];
+} __packed;
+
+struct acpi_mcfg_allocation {
+	uint64_t address;		/* Base address, processor-relative */
+	uint16_t pci_segment;		/* PCI segment group number */
+	uint8_t start_bus_number;	/* Starting PCI Bus number */
+	uint8_t end_bus_number;		/* Final PCI Bus number */
+	uint32_t reserved;
+} __packed;
+
 struct acpi_table_madt {
 	/* Common ACPI table header */
 	struct acpi_table_header     header;
@@ -146,15 +190,6 @@ struct acpi_madt_ioapic {
 	uint32_t  gsi_base;
 } __packed;
 
-enum acpi_dmar_type {
-	ACPI_DMAR_TYPE_HARDWARE_UNIT        = 0,
-	ACPI_DMAR_TYPE_RESERVED_MEMORY      = 1,
-	ACPI_DMAR_TYPE_ROOT_ATS             = 2,
-	ACPI_DMAR_TYPE_HARDWARE_AFFINITY    = 3,
-	ACPI_DMAR_TYPE_NAMESPACE            = 4,
-	ACPI_DMAR_TYPE_RESERVED             = 5
-};
-
 struct acpi_table_dmar {
 	/* Common ACPI table header */
 	struct acpi_table_header  header;
@@ -192,15 +227,14 @@ struct acpi_dmar_device_scope {
 	uint8_t                   bus;
 } __packed;
 
-
 void *get_acpi_tbl(const char *signature);
 
 struct ioapic_info;
-uint16_t parse_madt(uint32_t lapic_id_array[CONFIG_MAX_PCPU_NUM]);
-uint16_t parse_madt_ioapic(struct ioapic_info *ioapic_id_array);
+uint16_t parse_madt(uint32_t lapic_id_array[MAX_PCPU_NUM]);
+uint8_t parse_madt_ioapic(struct ioapic_info *ioapic_id_array);
 
 #ifdef CONFIG_ACPI_PARSE_ENABLED
-void acpi_fixup(void);
+int32_t acpi_fixup(void);
 #endif
 
 #endif /* !ACPI_H */

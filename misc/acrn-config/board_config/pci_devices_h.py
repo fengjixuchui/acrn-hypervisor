@@ -5,6 +5,7 @@
 
 import collections
 import board_cfg_lib
+import common
 
 PCI_HEADER = r"""
 #ifndef PCI_DEVICES_H_
@@ -13,67 +14,24 @@ PCI_HEADER = r"""
 PCI_END_HEADER = r"""
 #endif /* PCI_DEVICES_H_ */"""
 
-
-def parser_pci():
-    """Parser PCI lines"""
-    cur_bdf = 0
-    prev_bdf = 0
-    tmp_bar_dic = {}
-    pci_dev_dic = {}
-    pci_bar_dic = {}
-    bar_value = bar_num = '0'
-
-    pci_lines = board_cfg_lib.get_info(
-        board_cfg_lib.BOARD_INFO_FILE, "<PCI_DEVICE>", "</PCI_DEVICE>")
-    for line in pci_lines:
-        # get pci bar information into pci_bar_dic
-        if "Region" in line and "Memory at" in line:
-            bar_num = line.split()[1].strip(':')
-            bar_value = line.split()[4]
-            tmp_bar_dic[int(bar_num)] = hex(int(bar_value, 16))
-        else:
-            prev_bdf = cur_bdf
-            pci_bdf = line.split()[0]
-            pci_sub_name = " ".join(line.split(':')[1].split()[1:])
-
-            # remove '[*]' in pci subname
-            if '[' in pci_sub_name:
-                pci_sub_name = pci_sub_name.rsplit('[', 1)[0]
-
-            pci_dev_dic[pci_bdf] = pci_sub_name
-            cur_bdf = pci_bdf
-            #board_cfg_lib.LOGICAL_PCI_LINE[pci_bdf] = line
-
-            # skipt the first init value
-            if not prev_bdf:
-                prev_bdf = cur_bdf
-
-            if tmp_bar_dic and cur_bdf != prev_bdf:
-                pci_bar_dic[prev_bdf] = tmp_bar_dic
-
-            # clear the tmp_bar_dic before store the next dic
-            tmp_bar_dic = {}
-
-    # output all the pci device list to pci_device.h
-    sub_name_count = collections.Counter(pci_dev_dic.values())
-
-    # share the pci profile with pt_dev
-    #board_cfg_lib.LOGICAL_PT_PROFILE = sub_name_count
-    #board_cfg_lib.LOGICAL_PCI_DEV = pci_dev_dic
-
-    if tmp_bar_dic:
-        pci_bar_dic[cur_bdf] = tmp_bar_dic
-
-    return (pci_dev_dic, pci_bar_dic, sub_name_count)
-
-
-def write_pbdf(i_cnt, bdf, subname, config):
-    """Parser and generate pbdf"""
+def write_pbdf(i_cnt, bdf, bar_attr, config):
+    """
+    Parser and generate pbdf
+    :param i_cnt: the number of pci devices have the same PCI sub class name
+    :param bdf: it is a string what contains BDF
+    :param bar_attr: it is a class, contains PIC bar attribute
+    :param config: it is a file pointer of pci information for writing to
+    """
     # if there is only one host bridge, then will discard the index of suffix
-    if i_cnt == 0 and subname.upper() == "HOST BRIDGE":
-        tmp_sub_name = "_".join(subname.split()).upper()
+    if i_cnt == 0 and bar_attr.name.upper() == "HOST BRIDGE":
+        tmp_sub_name = "_".join(bar_attr.name.split()).upper()
     else:
-        tmp_sub_name = "_".join(subname.split()).upper() + "_" + str(i_cnt)
+        if '-' in bar_attr.name:
+            tmp_sub_name = common.undline_name(bar_attr.name) + "_" + str(i_cnt)
+        else:
+            tmp_sub_name = "_".join(bar_attr.name.split()).upper() + "_" + str(i_cnt)
+
+    board_cfg_lib.PCI_DEV_BAR_DESC.pci_dev_dic[bdf].name_w_i_cnt = tmp_sub_name
 
     bus = int(bdf.split(':')[0], 16)
     dev = int(bdf.split(':')[1].split('.')[0], 16)
@@ -82,36 +40,57 @@ def write_pbdf(i_cnt, bdf, subname, config):
     print("        .pbdf.bits = {{.b = 0x{:02X}U, .d = 0x{:02X}U, .f = 0x{:02X}U}}".format(
         bus, dev, fun), end="", file=config)
 
+    if not bar_attr.remappable:
+        align = ' ' * 48
+        print("\n{}/* TODO: add {} 64bit BAR support */".format(align, tmp_sub_name), file=config)
+        return
 
-def write_vbar(bdf, pci_bar_dic, config):
-    """Parser and generate vbar"""
+
+def write_vbar(i_cnt, bdf, pci_bar_dic, bar_attr, config):
+    """
+    Parser and generate vbar
+    :param i_cnt: the number of pci devices have the same PCI sub class name
+    :param bdf: it is a string what contains BDF
+    :param pci_bar_dic: it is a dictionary of pci vbar for those BDF
+    :param bar_attr: it is a class, contains PIC bar attribute
+    :param config: it is a file pointer of pci information for writing to
+    """
     tail = 0
     align = ' ' * 48
+    ptdev_mmio_str = ''
+
+    tmp_sub_name = common.undline_name(bar_attr.name) + "_" + str(i_cnt)
     if bdf in pci_bar_dic.keys():
         bar_list = list(pci_bar_dic[bdf].keys())
         bar_len = len(bar_list)
         bar_num = 0
         for bar_i in bar_list:
+            if not bar_attr.remappable:
+                return
+
             if tail == 0:
                 print(", \\", file=config)
                 tail += 1
             bar_num += 1
-            bar_val = pci_bar_dic[bdf][bar_i]
+            bar_val = pci_bar_dic[bdf][bar_i].addr
+            if pci_bar_dic[bdf][bar_i].remapped:
+                ptdev_mmio_str = 'PTDEV_HI_MMIO_START + '
 
             if bar_num == bar_len:
-                print("{}.vbar_base[{}] = {}UL".format(align, bar_i, bar_val), file=config)
+                print("{}.vbar_base[{}] = {}{}UL".format(align, bar_i, ptdev_mmio_str, bar_val), file=config)
             else:
-                print("{}.vbar_base[{}] = {}UL, \\".format(
-                    align, bar_i, bar_val), file=config)
+                print("{}.vbar_base[{}] = {}{}UL, \\".format(
+                    align, bar_i, ptdev_mmio_str, bar_val), file=config)
 
-        # print("", file=config)
     else:
         print("", file=config)
 
 
 def generate_file(config):
-    """Get PCI device and generate pci_devices.h"""
-
+    """
+    Get PCI device and generate pci_devices.h
+    :param config: it is a file pointer of pci information for writing to
+    """
     # write the license into pci
     print("{0}".format(board_cfg_lib.HEADER_LICENSE), file=config)
 
@@ -121,20 +100,22 @@ def generate_file(config):
     # write the header into pci
     print("{0}".format(PCI_HEADER), file=config)
 
-    (pci_dev_dic, pci_bar_dic, sub_name_count) = parser_pci()
+    sub_name_count = board_cfg_lib.parser_pci()
 
+    print("#define %-32s" % "PTDEV_HI_MMIO_SIZE", "       {}UL".format(hex(board_cfg_lib.HI_MMIO_OFFSET)), file=config)
 
     compared_bdf = []
     for cnt_sub_name in sub_name_count.keys():
         i_cnt = 0
-        for bdf, subname in pci_dev_dic.items():
-            if cnt_sub_name == subname and bdf not in compared_bdf:
+        for bdf, bar_attr in board_cfg_lib.PCI_DEV_BAR_DESC.pci_dev_dic.items():
+            if cnt_sub_name == bar_attr.name and bdf not in compared_bdf:
                 compared_bdf.append(bdf)
             else:
                 continue
 
-            write_pbdf(i_cnt, bdf, subname, config)
-            write_vbar(bdf, pci_bar_dic, config)
+            print("",file=config)
+            write_pbdf(i_cnt, bdf, bar_attr, config)
+            write_vbar(i_cnt, bdf, board_cfg_lib.PCI_DEV_BAR_DESC.pci_bar_dic, bar_attr, config)
 
             i_cnt += 1
 

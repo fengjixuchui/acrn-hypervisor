@@ -32,6 +32,7 @@
 #include "dm.h"
 #include "vmmapi.h"
 #include "sw_load.h"
+#include "log.h"
 
 
 /*                 ovmf binary layout:
@@ -117,8 +118,7 @@ acrn_prepare_ovmf(struct vmctx *ctx)
 
 	fp = fopen(ovmf_path, "r");
 	if (fp == NULL) {
-		fprintf(stderr,
-			"SW_LOAD ERR: could not open ovmf file: %s\n",
+		pr_err("SW_LOAD ERR: could not open ovmf file: %s\n",
 			ovmf_path);
 		return -1;
 	}
@@ -126,8 +126,7 @@ acrn_prepare_ovmf(struct vmctx *ctx)
 	fseek(fp, 0, SEEK_END);
 
 	if (ftell(fp) != ovmf_size) {
-		fprintf(stderr,
-			"SW_LOAD ERR: ovmf file changed\n");
+		pr_err("SW_LOAD ERR: ovmf file changed\n");
 		fclose(fp);
 		return -1;
 	}
@@ -137,14 +136,13 @@ acrn_prepare_ovmf(struct vmctx *ctx)
 		sizeof(char), ovmf_size, fp);
 
 	if (read < ovmf_size) {
-		fprintf(stderr,
-			"SW_LOAD ERR: could not read whole partition blob\n");
+		pr_err("SW_LOAD ERR: could not read whole partition blob\n");
 		fclose(fp);
 		return -1;
 	}
 
 	fclose(fp);
-	printf("SW_LOAD: partition blob %s size %lu copy to guest 0x%lx\n",
+	pr_info("SW_LOAD: partition blob %s size %lu copy to guest 0x%lx\n",
 		ovmf_path, ovmf_size, OVMF_TOP(ctx) - ovmf_size);
 	return 0;
 }
@@ -175,7 +173,7 @@ acrn_sw_load_ovmf(struct vmctx *ctx)
 	strncpy(e820->signature, "820", sizeof(e820->signature));
 	e820->nentries = acrn_create_e820_table(ctx, e820->map);
 
-	printf("SW_LOAD: ovmf_entry 0x%lx\n", OVMF_TOP(ctx) - 16);
+	pr_info("SW_LOAD: ovmf_entry 0x%lx\n", OVMF_TOP(ctx) - 16);
 
 	/* set guest bsp state. Will call hypercall set bsp state
 	 * after bsp is created.
@@ -212,8 +210,7 @@ acrn_writeback_ovmf_nvstorage(struct vmctx *ctx)
 
 	fp = fopen(ovmf_path, "r+");
 	if (fp == NULL) {
-		fprintf(stderr,
-			"OVMF_WRITEBACK ERR: could not open ovmf file: %s\n",
+		pr_err("OVMF_WRITEBACK ERR: could not open ovmf file: %s\n",
 			ovmf_path);
 		return -1;
 	}
@@ -221,8 +218,7 @@ acrn_writeback_ovmf_nvstorage(struct vmctx *ctx)
 	fseek(fp, 0, SEEK_END);
 
 	if (ftell(fp) != ovmf_size) {
-		fprintf(stderr,
-			"SW_LOAD ERR: ovmf file changed\n");
+		pr_err("SW_LOAD ERR: ovmf file changed\n");
 		fclose(fp);
 		return -1;
 	}
@@ -232,14 +228,13 @@ acrn_writeback_ovmf_nvstorage(struct vmctx *ctx)
 		sizeof(char), OVMF_NVSTORAGE_SZ, fp);
 
 	if (write < OVMF_NVSTORAGE_SZ) {
-		fprintf(stderr,
-			"OVMF_WRITEBACK ERR: could not write back OVMF\n");
+		pr_err("OVMF_WRITEBACK ERR: could not write back OVMF\n");
 		fclose(fp);
 		return -1;
 	}
 
 	fclose(fp);
-	printf("OVMF_WRITEBACK: OVMF has been written back \
+	pr_info("OVMF_WRITEBACK: OVMF has been written back \
 		to partition blob %s size %lu from guest 0x%lx\n",
 		ovmf_path, OVMF_NVSTORAGE_SZ, OVMF_NVSTORAGE_OFFSET);
 

@@ -8,14 +8,13 @@
 #include <init.h>
 #include <console.h>
 #include <per_cpu.h>
-#include <profiling.h>
-#include <vtd.h>
 #include <shell.h>
 #include <vmx.h>
 #include <vm.h>
 #include <logmsg.h>
-#include <vboot.h>
 #include <seed.h>
+#include <ld_sym.h>
+#include <boot.h>
 
 /* Push sp magic to top of stack for call trace */
 #define SWITCH_TO(rsp, to)                                              \
@@ -40,7 +39,7 @@ static void init_debug_pre(void)
 /*TODO: move into debug module */
 static void init_debug_post(uint16_t pcpu_id)
 {
-	if (pcpu_id == BOOT_CPU_ID) {
+	if (pcpu_id == BSP_CPU_ID) {
 		/* Initialize the shell */
 		shell_init();
 		console_setup_timer();
@@ -50,29 +49,23 @@ static void init_debug_post(uint16_t pcpu_id)
 }
 
 /*TODO: move into guest-vcpu module */
-static void enter_guest_mode(uint16_t pcpu_id)
+static void init_guest_mode(uint16_t pcpu_id)
 {
 	vmx_on();
 
-	(void)launch_vms(pcpu_id);
-
-	switch_to_idle(default_idle);
-
-	/* Control should not come here */
-	cpu_dead();
+	launch_vms(pcpu_id);
 }
 
-static void init_primary_pcpu_post(void)
+static void init_pcpu_comm_post(void)
 {
-	init_debug_pre();
+	uint16_t pcpu_id;
 
-	init_seed();
+	pcpu_id = get_pcpu_id();
 
-	init_pcpu_post(BOOT_CPU_ID);
-
-	init_debug_post(BOOT_CPU_ID);
-
-	enter_guest_mode(BOOT_CPU_ID);
+	init_pcpu_post(pcpu_id);
+	init_debug_post(pcpu_id);
+	init_guest_mode(pcpu_id);
+	run_idle_thread();
 }
 
 /* NOTE: this function is using temp stack, and after SWITCH_TO(runtime_sp, to)
@@ -82,25 +75,25 @@ void init_primary_pcpu(void)
 {
 	uint64_t rsp;
 
+	/* Clear BSS */
+	(void)memset(&ld_bss_start, 0U, (size_t)(&ld_bss_end - &ld_bss_start));
+
+	parse_hv_cmdline();
+
+	init_debug_pre();
+
 	init_pcpu_pre(true);
+
+	init_seed();
 
 	/* Switch to run-time stack */
 	rsp = (uint64_t)(&get_cpu_var(stack)[CONFIG_STACK_SIZE - 1]);
 	rsp &= ~(CPU_STACK_ALIGN - 1UL);
-	SWITCH_TO(rsp, init_primary_pcpu_post);
+	SWITCH_TO(rsp, init_pcpu_comm_post);
 }
 
 void init_secondary_pcpu(void)
 {
-	uint16_t pcpu_id;
-
 	init_pcpu_pre(false);
-
-	pcpu_id = get_pcpu_id();
-
-	init_pcpu_post(pcpu_id);
-
-	init_debug_post(pcpu_id);
-
-	enter_guest_mode(pcpu_id);
+	init_pcpu_comm_post();
 }

@@ -112,6 +112,13 @@ typedef int32_t (*hv_mem_io_handler_t)(struct io_request *io_req, void *handler_
  * @brief Structure for MMIO handler node
  */
 struct mem_io_node {
+
+	/**
+	 * @brief Whether the lock needs to hold when handle the MMIO access
+	 */
+	bool hold_lock;
+
+
 	/**
 	 * @brief A pointer to the handler
 	 *
@@ -251,33 +258,34 @@ void   register_pio_emulation_handler(struct acrn_vm *vm, uint32_t pio_idx,
 /**
  * @brief Register a MMIO handler
  *
- * This API registers a MMIO handler to \p vm before it is launched.
+ * This API registers a MMIO handler to \p vm.
  *
  * @param vm The VM to which the MMIO handler is registered
  * @param read_write The handler for emulating accesses to the given range
  * @param start The base address of the range \p read_write can emulate
  * @param end The end of the range (exclusive) \p read_write can emulate
  * @param handler_private_data Handler-specific data which will be passed to \p read_write when called
+ * @param hold_lock Whether hold the lock to handle the MMIO access
  *
  * @return None
  */
 void register_mmio_emulation_handler(struct acrn_vm *vm,
 	hv_mem_io_handler_t read_write, uint64_t start,
-	uint64_t end, void *handler_private_data);
+	uint64_t end, void *handler_private_data, bool hold_lock);
 
 /**
- * @brief Register port I/O default handler
+ * @brief Unregister a MMIO handler
  *
- * @param vm      The VM to which the port I/O handlers are registered
- */
-void register_pio_default_emulation_handler(struct acrn_vm *vm);
-
-/**
- * @brief Register MMIO default handler
+ * This API unregisters a MMIO handler to \p vm
  *
- * @param vm The VM to which the MMIO handler is registered
+ * @param vm The VM to which the MMIO handler is unregistered
+ * @param start The base address of the range which wants to unregister
+ * @param end The end of the range (exclusive) which wants to unregister
+ *
+ * @return None
  */
-void register_mmio_default_emulation_handler(struct acrn_vm *vm);
+void unregister_mmio_emulation_handler(struct acrn_vm *vm,
+					uint64_t start, uint64_t end);
 
 /**
  * @}

@@ -10,29 +10,24 @@
 #include <vmexit.h>
 #include <irq.h>
 #include <schedule.h>
-#include <softirq.h>
 #include <profiling.h>
+#include <sprintf.h>
 #include <trace.h>
 #include <logmsg.h>
 
-void vcpu_thread(struct sched_object *obj)
+void vcpu_thread(struct thread_object *obj)
 {
-	struct acrn_vcpu *vcpu = list_entry(obj, struct acrn_vcpu, sched_obj);
+	struct acrn_vcpu *vcpu = container_of(obj, struct acrn_vcpu, thread_obj);
 	uint32_t basic_exit_reason = 0U;
 	int32_t ret = 0;
 
 	do {
-		/* If vcpu is not launched, we need to do init_vmcs first */
-		if (!vcpu->launched) {
-			init_vmcs(vcpu);
-		}
-
 		if (!is_lapic_pt_enabled(vcpu)) {
 			CPU_IRQ_DISABLE();
 		}
 
 		/* Don't open interrupt window between here and vmentry */
-		if (need_reschedule(vcpu->pcpu_id)) {
+		if (need_reschedule(pcpuid_from_vcpu(vcpu))) {
 			schedule();
 		}
 
@@ -42,9 +37,10 @@ void vcpu_thread(struct sched_object *obj)
 			pr_fatal("vcpu handling pending request fail");
 			pause_vcpu(vcpu, VCPU_ZOMBIE);
 			/* Fatal error happened (triple fault). Stop the vcpu running. */
-			schedule();
+			continue;
 		}
 
+		reset_event(&vcpu->events[VCPU_EVENT_VIRTUAL_INTERRUPT]);
 		profiling_vmenter_handler(vcpu);
 
 		TRACE_2L(TRACE_VM_ENTER, 0UL, 0UL);
@@ -53,7 +49,7 @@ void vcpu_thread(struct sched_object *obj)
 			pr_fatal("vcpu resume failed");
 			pause_vcpu(vcpu, VCPU_ZOMBIE);
 			/* Fatal error happened (resume vcpu failed). Stop the vcpu running. */
-			schedule();
+			continue;
 		}
 		basic_exit_reason = vcpu->arch.exit_reason & 0xFFFFU;
 		TRACE_2L(TRACE_VM_EXIT, basic_exit_reason, vcpu_get_rip(vcpu));
@@ -78,7 +74,7 @@ void vcpu_thread(struct sched_object *obj)
 	} while (1);
 }
 
-void default_idle(__unused struct sched_object *obj)
+void default_idle(__unused struct thread_object *obj)
 {
 	uint16_t pcpu_id = get_pcpu_id();
 
@@ -95,4 +91,23 @@ void default_idle(__unused struct sched_object *obj)
 			CPU_IRQ_DISABLE();
 		}
 	}
+}
+
+void run_idle_thread(void)
+{
+	uint16_t pcpu_id = get_pcpu_id();
+	struct thread_object *idle = &per_cpu(idle, pcpu_id);
+	char idle_name[16];
+
+	snprintf(idle_name, 16U, "idle%hu", pcpu_id);
+	(void)strncpy_s(idle->name, 16U, idle_name, 16U);
+	idle->pcpu_id = pcpu_id;
+	idle->thread_entry = default_idle;
+	idle->switch_out = NULL;
+	idle->switch_in = NULL;
+
+	run_thread(idle);
+
+	/* Control should not come here */
+	cpu_dead();
 }

@@ -37,6 +37,7 @@ static struct cpu_capability {
 
 	uint32_t vmx_ept;
 	uint32_t vmx_vpid;
+	uint32_t core_caps;	/* value of MSR_IA32_CORE_CAPABLITIES */
 } cpu_caps;
 
 static struct cpuinfo_x86 boot_cpu_data;
@@ -111,6 +112,22 @@ static bool is_ctrl_setting_allowed(uint64_t msr_val, uint32_t ctrl)
 	 *   only if bit 32+X in msr_val is 1
 	 */
 	return ((((uint32_t)(msr_val >> 32UL)) & ctrl) == ctrl);
+}
+
+bool is_apl_platform(void)
+{
+	bool ret = false;
+
+	if ((boot_cpu_data.family == 0x6U) && (boot_cpu_data.model == 0x92U)) {
+		ret = true;
+	}
+
+	return ret;
+}
+
+bool has_core_cap(uint32_t bit_mask)
+{
+	return ((cpu_caps.core_caps & bit_mask) != 0U);
 }
 
 static void detect_ept_cap(void)
@@ -189,11 +206,36 @@ static void detect_vmx_mmu_cap(void)
 	cpu_caps.vmx_vpid = (uint32_t) (val >> 32U);
 }
 
+static void detect_xsave_cap(void)
+{
+	uint32_t unused;
+
+	cpuid_subleaf(CPUID_XSAVE_FEATURES, 0x0U,
+		&boot_cpu_data.cpuid_leaves[FEAT_D_0_EAX],
+		&unused,
+		&unused,
+		&boot_cpu_data.cpuid_leaves[FEAT_D_0_EDX]);
+	cpuid_subleaf(CPUID_XSAVE_FEATURES, 1U,
+		&boot_cpu_data.cpuid_leaves[FEAT_D_1_EAX],
+		&unused,
+		&boot_cpu_data.cpuid_leaves[FEAT_D_1_ECX],
+		&boot_cpu_data.cpuid_leaves[FEAT_D_1_EDX]);
+}
+
+static void detect_core_caps(void)
+{
+	if (pcpu_has_cap(X86_FEATURE_CORE_CAP)) {
+		cpu_caps.core_caps = (uint32_t)msr_read(MSR_IA32_CORE_CAPABILITIES);
+	}
+}
+
 static void detect_pcpu_cap(void)
 {
 	detect_apicv_cap();
 	detect_ept_cap();
 	detect_vmx_mmu_cap();
+	detect_xsave_cap();
+	detect_core_caps();
 }
 
 static uint64_t get_address_mask(uint8_t limit)
@@ -206,11 +248,11 @@ void init_pcpu_capabilities(void)
 	uint32_t eax, unused;
 	uint32_t family, model;
 
-	cpuid(CPUID_VENDORSTRING,
+	cpuid_subleaf(CPUID_VENDORSTRING, 0x0U,
 		&boot_cpu_data.cpuid_level,
 		&unused, &unused, &unused);
 
-	cpuid(CPUID_FEATURES, &eax, &unused,
+	cpuid_subleaf(CPUID_FEATURES, 0x0U, &eax, &unused,
 		&boot_cpu_data.cpuid_leaves[FEAT_1_ECX],
 		&boot_cpu_data.cpuid_leaves[FEAT_1_EDX]);
 	family = (eax >> 8U) & 0xfU;
@@ -220,29 +262,34 @@ void init_pcpu_capabilities(void)
 	boot_cpu_data.family = (uint8_t)family;
 
 	model = (eax >> 4U) & 0xfU;
-	if (family >= 0x06U) {
+	if (family == 0x06U || family == 0xFU) {
 		model += ((eax >> 16U) & 0xfU) << 4U;
 	}
 	boot_cpu_data.model = (uint8_t)model;
 
 
-	cpuid(CPUID_EXTEND_FEATURE, &unused,
+	cpuid_subleaf(CPUID_EXTEND_FEATURE, 0x0U, &unused,
 		&boot_cpu_data.cpuid_leaves[FEAT_7_0_EBX],
 		&boot_cpu_data.cpuid_leaves[FEAT_7_0_ECX],
 		&boot_cpu_data.cpuid_leaves[FEAT_7_0_EDX]);
 
-	cpuid(CPUID_MAX_EXTENDED_FUNCTION,
+	cpuid_subleaf(CPUID_MAX_EXTENDED_FUNCTION, 0x0U,
 		&boot_cpu_data.extended_cpuid_level,
 		&unused, &unused, &unused);
 
 	if (boot_cpu_data.extended_cpuid_level >= CPUID_EXTEND_FUNCTION_1) {
-		cpuid(CPUID_EXTEND_FUNCTION_1, &unused, &unused,
+		cpuid_subleaf(CPUID_EXTEND_FUNCTION_1, 0x0U, &unused, &unused,
 			&boot_cpu_data.cpuid_leaves[FEAT_8000_0001_ECX],
 			&boot_cpu_data.cpuid_leaves[FEAT_8000_0001_EDX]);
 	}
 
+	if (boot_cpu_data.extended_cpuid_level >= CPUID_EXTEND_INVA_TSC) {
+		cpuid_subleaf(CPUID_EXTEND_INVA_TSC, 0x0U, &eax, &unused, &unused,
+			&boot_cpu_data.cpuid_leaves[FEAT_8000_0007_EDX]);
+	}
+
 	if (boot_cpu_data.extended_cpuid_level >= CPUID_EXTEND_ADDRESS_SIZE) {
-		cpuid(CPUID_EXTEND_ADDRESS_SIZE, &eax,
+		cpuid_subleaf(CPUID_EXTEND_ADDRESS_SIZE, 0x0U, &eax,
 			&boot_cpu_data.cpuid_leaves[FEAT_8000_0008_EBX],
 			&unused, &unused);
 
@@ -285,17 +332,17 @@ bool pcpu_has_vmx_vpid_cap(uint32_t bit_mask)
 
 void init_pcpu_model_name(void)
 {
-	cpuid(CPUID_EXTEND_FUNCTION_2,
+	cpuid_subleaf(CPUID_EXTEND_FUNCTION_2, 0x0U,
 		(uint32_t *)(boot_cpu_data.model_name),
 		(uint32_t *)(&boot_cpu_data.model_name[4]),
 		(uint32_t *)(&boot_cpu_data.model_name[8]),
 		(uint32_t *)(&boot_cpu_data.model_name[12]));
-	cpuid(CPUID_EXTEND_FUNCTION_3,
+	cpuid_subleaf(CPUID_EXTEND_FUNCTION_3, 0x0U,
 		(uint32_t *)(&boot_cpu_data.model_name[16]),
 		(uint32_t *)(&boot_cpu_data.model_name[20]),
 		(uint32_t *)(&boot_cpu_data.model_name[24]),
 		(uint32_t *)(&boot_cpu_data.model_name[28]));
-	cpuid(CPUID_EXTEND_FUNCTION_4,
+	cpuid_subleaf(CPUID_EXTEND_FUNCTION_4, 0x0U,
 		(uint32_t *)(&boot_cpu_data.model_name[32]),
 		(uint32_t *)(&boot_cpu_data.model_name[36]),
 		(uint32_t *)(&boot_cpu_data.model_name[40]),
@@ -366,6 +413,10 @@ int32_t detect_hardware_support(void)
 		(boot_cpu_data.virt_bits == 0U)) {
 		printf("%s, can't detect Linear/Physical Address size\n", __func__);
 		ret = -ENODEV;
+	} else if (!pcpu_has_cap(X86_FEATURE_INVA_TSC)) {
+		/* check invariant TSC */
+		printf("%s, invariant TSC not supported\n", __func__);
+		ret = -ENODEV;
 	} else if (!pcpu_has_cap(X86_FEATURE_TSC_DEADLINE)) {
 		/* lapic TSC deadline timer */
 		printf("%s, TSC deadline not supported\n", __func__);
@@ -411,11 +462,17 @@ int32_t detect_hardware_support(void)
 	} else if (is_vmx_disabled()) {
 		printf("%s, VMX can not be enabled\n", __func__);
 		ret = -ENODEV;
-	} else if (get_pcpu_nums() > CONFIG_MAX_PCPU_NUM) {
-		printf("%s, pcpu number(%d) is out of range\n", __func__, get_pcpu_nums());
-		ret = -ENODEV;
 	} else if (!pcpu_has_cap(X86_FEATURE_X2APIC)) {
 		printf("%s, x2APIC not supported\n", __func__);
+		ret = -ENODEV;
+	} else if (!pcpu_has_cap(X86_FEATURE_POPCNT)) {
+		printf("%s, popcnt instruction not supported\n", __func__);
+		ret = -ENODEV;
+	} else if (!pcpu_has_cap(X86_FEATURE_XSAVES)) {
+		printf("%s, XSAVES not supported\n", __func__);
+		ret = -ENODEV;
+	} else if (!pcpu_has_cap(X86_FEATURE_COMPACTION_EXT)) {
+		printf("%s, Compaction extensions in XSAVE is not supported\n", __func__);
 		ret = -ENODEV;
 	} else {
 		ret = check_vmx_mmu_cap();

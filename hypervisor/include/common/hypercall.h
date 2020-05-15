@@ -13,8 +13,6 @@
 #ifndef HYPERCALL_H
 #define HYPERCALL_H
 
-struct vhm_request;
-
 bool is_hypercall_from_ring0(void);
 
 /**
@@ -135,23 +133,6 @@ int32_t hcall_start_vm(uint16_t vmid);
 int32_t hcall_pause_vm(uint16_t vmid);
 
 /**
- * @brief create vcpu
- *
- * Create a vcpu based on parameter for a VM, it will allocate vcpu from
- * freed physical cpus, if there is no available pcpu, the function will
- * return -1.
- *
- * @param vm Pointer to VM data structure
- * @param vmid ID of the VM
- * @param param guest physical address. This gpa points to
- *              struct acrn_create_vcpu
- *
- * @pre Pointer vm shall point to SOS_VM
- * @return 0 on success, non-zero on error.
- */
-int32_t hcall_create_vcpu(struct acrn_vm *vm, uint16_t vmid, uint64_t param);
-
-/**
  * @brief set vcpu regs
  *
  * Set the vcpu regs. It will set the vcpu init regs from DM. Now,
@@ -268,32 +249,30 @@ int32_t hcall_write_protect_page(struct acrn_vm *vm, uint16_t vmid, uint64_t wp_
 int32_t hcall_gpa_to_hpa(struct acrn_vm *vm, uint16_t vmid, uint64_t param);
 
 /**
- * @brief Assign one passthrough dev to VM.
+ * @brief Assign one PCI dev to VM.
  *
  * @param vm Pointer to VM data structure
  * @param vmid ID of the VM
- * @param param the physical BDF of the assigning ptdev
- *              To keep the compatibility it still can be the guest physical address that
- *              points to the physical BDF of the assigning ptdev.(Depreciated)
+ * @param param guest physical address. This gpa points to data structure of
+ *              acrn_assign_pcidev including assign PCI device info
  *
  * @pre Pointer vm shall point to SOS_VM
  * @return 0 on success, non-zero on error.
  */
-int32_t hcall_assign_ptdev(struct acrn_vm *vm, uint16_t vmid, uint64_t param);
+int32_t hcall_assign_pcidev(struct acrn_vm *vm, uint16_t vmid, uint64_t param);
 
 /**
- * @brief Deassign one passthrough dev from VM.
+ * @brief Deassign one PCI dev to VM.
  *
  * @param vm Pointer to VM data structure
  * @param vmid ID of the VM
- * @param param the physical BDF of the deassigning ptdev
- *              To keep the compatibility it still can be the guest physical address that
- *              points to the physical BDF of the deassigning ptdev.(Depreciated)
+ * @param param guest physical address. This gpa points to data structure of
+ *              acrn_assign_pcidev including deassign PCI device info
  *
  * @pre Pointer vm shall point to SOS_VM
  * @return 0 on success, non-zero on error.
  */
-int32_t hcall_deassign_ptdev(struct acrn_vm *vm, uint16_t vmid, uint64_t param);
+int32_t hcall_deassign_pcidev(struct acrn_vm *vm, uint16_t vmid, uint64_t param);
 
 /**
  * @brief Set interrupt mapping info of ptdev.

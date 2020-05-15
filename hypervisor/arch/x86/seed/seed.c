@@ -11,7 +11,7 @@
 #include <sprintf.h>
 #include <ept.h>
 #include <logmsg.h>
-#include <multiboot.h>
+#include <boot.h>
 #include <crypto_api.h>
 #include <seed.h>
 #include "seed_abl.h"
@@ -41,17 +41,12 @@ static uint32_t parse_seed_arg(void)
 {
 	char *cmd_src = NULL;
 	char *arg, *arg_end;
-	struct multiboot_info *mbi = NULL;
+	struct acrn_multiboot_info *mbi = get_multiboot_info();
 	uint32_t i = SEED_ARG_NUM - 1U;
 	uint32_t len;
 
-	if (boot_regs[0U] == MULTIBOOT_INFO_MAGIC) {
-		mbi = (struct multiboot_info *)hpa2hva((uint64_t)boot_regs[1U]);
-		if (mbi != NULL) {
-			if ((mbi->mi_flags & MULTIBOOT_INFO_HAS_CMDLINE) != 0U) {
-				cmd_src = (char *)hpa2hva((uint64_t)mbi->mi_cmdline);
-			}
-		}
+	if ((mbi->mi_flags & MULTIBOOT_INFO_HAS_CMDLINE) != 0U) {
+		cmd_src = mbi->mi_cmdline;
 	}
 
 	if (cmd_src != NULL) {
@@ -102,7 +97,7 @@ void append_seed_arg(char *cmd_dst, bool vm_is_sos)
 
 	if ((cmd_dst != NULL) && vm_is_sos) {
 		for (i = 0U; seed_arg[i].str != NULL; i++) {
-			if (seed_arg[i].addr != 0ULL) {
+			if (seed_arg[i].addr != 0UL) {
 				(void)memset(buf, 0U, sizeof(buf));
 
 				snprintf(buf, sizeof(buf), "%s0x%X ", seed_arg[i].str,

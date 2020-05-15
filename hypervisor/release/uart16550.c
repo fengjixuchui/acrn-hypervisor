@@ -5,5 +5,6 @@
  */
 
 #include <types.h>
+#include <pci.h>
 
 void uart16550_init(__unused bool early_boot) {}

@@ -24,11 +24,9 @@ You can see the available ``acrnctl`` commands by running:
    support:
      list
      start
-     stop
+     stop [--force/-f]
      del
      add
-     pause
-     continue
      suspend
      resume
      reset
@@ -57,7 +55,7 @@ container::
    # acrnctl add launch_uos.sh -C
 
 .. note:: You can download an `example launch_uos.sh script
-   <https://raw.githubusercontent.com/projectacrn/acrnhypervisor/master/devicemodel/samples/nuc/launch_uos.sh>`_
+   <https://raw.githubusercontent.com/projectacrn/acrn-hypervisor/master/devicemodel/samples/nuc/launch_uos.sh>`_
    that supports the ``-C``  (``run_container`` function) option. You may refer to :ref:`acrn-dm_qos`
    for more details about this option.
 
@@ -106,6 +104,15 @@ Use the ``stop`` command to stop one or more running VM:
 .. code-block:: none
 
    # acrnctl stop vm-yocto vm1-14:59:30 vm-android
+
+Use the optional ``-f`` or ``--force`` argument to force the stop operation.
+This will trigger an immediate shutdown of the User VM by the ACRN Device Model
+and can be useful when the User VM is in a bad state and not shutting down
+gracefully by itself.
+
+.. code-block:: none
+
+   # acrnctl stop -f vm-yocto
 
 RESCAN BLOCK DEVICE
 ===================

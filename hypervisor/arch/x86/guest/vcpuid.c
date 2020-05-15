@@ -116,8 +116,8 @@ static void init_vcpuid_entry(uint32_t leaf, uint32_t subleaf,
 	case 0x07U:
 		if (subleaf == 0U) {
 			cpuid_subleaf(leaf, subleaf, &entry->eax, &entry->ebx, &entry->ecx, &entry->edx);
-			/* mask invpcid */
-			entry->ebx &= ~(CPUID_EBX_INVPCID | CPUID_EBX_PQM | CPUID_EBX_PQE);
+
+			entry->ebx &= ~(CPUID_EBX_PQM | CPUID_EBX_PQE);
 
 			/* mask SGX and SGX_LC */
 			entry->ebx &= ~CPUID_EBX_SGX;
@@ -263,8 +263,25 @@ static int32_t set_vcpuid_extended_function(struct acrn_vm *vm)
 		if (is_sos_vm(vm)) {
 			entry.eax |= GUEST_CAPS_PRIVILEGE_VM;
 		}
+#ifdef CONFIG_HYPERV_ENABLED
+		else {
+			hyperv_init_vcpuid_entry(0x40000001U, 0U, 0U, &entry);
+		}
+#endif
 		result = set_vcpuid_entry(vm, &entry);
 	}
+
+#ifdef CONFIG_HYPERV_ENABLED
+	if (result == 0) {
+		for (i = 0x40000002U; i <= 0x40000006U; i++) {
+			hyperv_init_vcpuid_entry(i, 0U, 0U, &entry);
+			result = set_vcpuid_entry(vm, &entry);
+			if (result != 0) {
+				break;
+			}
+		}
+	}
+#endif
 
 	if (result == 0) {
 		init_vcpuid_entry(0x40000010U, 0U, 0U, &entry);
@@ -383,7 +400,7 @@ static void guest_cpuid_01h(struct acrn_vcpu *vcpu, uint32_t *eax, uint32_t *ebx
 	uint32_t apicid = vlapic_get_apicid(vcpu_vlapic(vcpu));
 	uint64_t guest_ia32_misc_enable = vcpu_get_guest_msr(vcpu, MSR_IA32_MISC_ENABLE);
 
-	cpuid(0x1U, eax, ebx, ecx, edx);
+	cpuid_subleaf(0x1U, 0x0U, eax, ebx, ecx, edx);
 	/* Patching initial APIC ID */
 	*ebx &= ~APIC_ID_MASK;
 	*ebx |= (apicid <<  APIC_ID_SHIFT);
@@ -404,9 +421,6 @@ static void guest_cpuid_01h(struct acrn_vcpu *vcpu, uint32_t *eax, uint32_t *ebx
 
 	/* mask SDBG for silicon debug */
 	*ecx &= ~CPUID_ECX_SDBG;
-
-	/* mask pcid */
-	*ecx &= ~CPUID_ECX_PCID;
 
 	/*mask vmx to guest os */
 	*ecx &= ~CPUID_ECX_VMX;
@@ -503,7 +517,7 @@ static void guest_cpuid_80000001h(const struct acrn_vcpu *vcpu,
 	uint32_t leaf = 0x80000001U;
 
 	if ((entry_check != NULL) && (entry_check->eax >= leaf)) {
-		cpuid(leaf, eax, ebx, ecx, edx);
+		cpuid_subleaf(leaf, 0x0U, eax, ebx, ecx, edx);
 		/* SDM Vol4 2.1, XD Bit Disable of MSR_IA32_MISC_ENABLE
 		 * When set to 1, the Execute Disable Bit feature (XD Bit) is disabled and the XD Bit
 		 * extended feature flag will be clear (CPUID.80000001H: EDX[20]=0)

@@ -26,11 +26,23 @@
 #include <cpu_caps.h>
 #include <e820.h>
 #include <vm_config.h>
+#ifdef CONFIG_HYPERV_ENABLED
+#include <hyperv.h>
+#endif
+
+enum reset_mode {
+	POWER_ON_RESET,		/* reset by hardware Power-on */
+	COLD_RESET,		/* hardware cold reset */
+	WARM_RESET,		/* behavior slightly differ from cold reset, that some MSRs might be retained. */
+	INIT_RESET,		/* reset by INIT */
+	SOFTWARE_RESET,		/* reset by software disable<->enable */
+};
 
 struct vm_hw_info {
 	/* vcpu array of this VM */
-	struct acrn_vcpu vcpu_array[CONFIG_MAX_VCPUS_PER_VM];
+	struct acrn_vcpu vcpu_array[MAX_VCPUS_PER_VM];
 	uint16_t created_vcpus;	/* Number of created vcpus */
+	uint64_t cpu_affinity;	/* Actual pCPUs this VM runs on. The set bits represent the pCPU IDs */
 } __aligned(PAGE_SIZE);
 
 struct sw_module_info {
@@ -56,7 +68,7 @@ struct vm_sw_info {
 	/* HVA to IO shared page */
 	void *io_shared_page;
 	/* If enable IO completion polling mode */
-	bool is_completion_polling;
+	bool is_polling_ioreq;
 };
 
 struct vm_pm_info {
@@ -71,8 +83,8 @@ struct vm_pm_info {
 enum vm_state {
 	VM_POWERED_OFF = 0,
 	VM_CREATED,	/* VM created / awaiting start (boot) */
-	VM_STARTED,	/* VM started (booted) */
-	VM_POWERING_OFF,     /* RTVM only, it is trying to poweroff by itself */
+	VM_RUNNING,	/* VM running */
+	VM_READY_TO_POWEROFF,     /* RTVM only, it is trying to poweroff by itself */
 	VM_PAUSED,	/* VM paused */
 };
 
@@ -87,7 +99,6 @@ struct vm_arch {
 	/* I/O bitmaps A and B for this VM, MUST be 4-Kbyte aligned */
 	uint8_t io_bitmap[PAGE_SIZE*2];
 
-	uint64_t guest_init_pml4;/* Guest init pml4 */
 	/* EPT hierarchy for Normal World */
 	void *nworld_eptp;
 	/* EPT hierarchy for Secure World
@@ -97,9 +108,11 @@ struct vm_arch {
 	void *sworld_eptp;
 	struct memory_ops ept_mem_ops;
 
-	void *tmp_pg_array;	/* Page array for tmp guest paging struct */
-	struct acrn_vioapic vioapic;	/* Virtual IOAPIC base address */
+	struct acrn_vioapics vioapics;	/* Virtual IOAPIC/s */
 	struct acrn_vpic vpic;      /* Virtual PIC */
+#ifdef CONFIG_HYPERV_ENABLED
+	struct acrn_hyperv hyperv;
+#endif
 	enum vm_vlapic_state vlapic_state; /* Represents vLAPIC state across vCPUs*/
 
 	/* reference to virtual platform to come here (as needed) */
@@ -111,21 +124,20 @@ struct acrn_vm {
 	struct vm_sw_info sw;	/* Reference to SW associated with this VM */
 	struct vm_pm_info pm;	/* Reference to this VM's arch information */
 	uint32_t e820_entry_num;
-	const struct e820_entry *e820_entries;
+	struct e820_entry *e820_entries;
 	uint16_t vm_id;		    /* Virtual machine identifier */
 	enum vm_state state;	/* VM state */
 	struct acrn_vuart vuart[MAX_VUART_NUM_PER_VM];		/* Virtual UART */
 	enum vpic_wire_mode wire_mode;
 	struct iommu_domain *iommu;	/* iommu domain of this VM */
-	spinlock_t vm_lock;	/* Spin-lock used to protect VM modifications */
+	spinlock_t vm_lock;	/* Spin-lock used to protect vlapic_state modifications for a VM */
+	spinlock_t ept_lock;	/* Spin-lock used to protect ept add/modify/remove for a VM */
 
-	uint16_t emul_mmio_regions; /* Number of emulated mmio regions */
+	spinlock_t emul_mmio_lock;	/* Used to protect emulation mmio_node concurrent access for a VM */
+	uint16_t max_emul_mmio_regions;	/* max index of the emulated mmio_region */
 	struct mem_io_node emul_mmio[CONFIG_MAX_EMULATED_MMIO_REGIONS];
-	hv_mem_io_handler_t default_read_write;
 
 	struct vm_io_handler_desc emul_pio[EMUL_PIO_IDX_MAX];
-	io_read_fn_t default_io_read;
-	io_write_fn_t default_io_write;
 
 	uint8_t uuid[16];
 	struct secure_world_control sworld_control;
@@ -135,7 +147,7 @@ struct acrn_vm {
 	 * so the snapshot only stores the vcpu0's run_context
 	 * of secure world.
 	 */
-	struct cpu_context sworld_snapshot;
+	struct guest_cpu_context sworld_snapshot;
 
 	uint32_t vcpuid_entry_nr, vcpuid_level, vcpuid_xlevel;
 	struct vcpuid_entry vcpuid_entries[MAX_VM_VCPUID_ENTRIES];
@@ -143,8 +155,6 @@ struct acrn_vm {
 
 	uint8_t vrtc_offset;
 
-	spinlock_t softirq_dev_lock;
-	struct list_head softirq_dev_entry_list;
 	uint64_t intr_inject_delay_delta; /* delay of intr injection */
 } __aligned(PAGE_SIZE);
 
@@ -165,7 +175,7 @@ static inline uint64_t vm_active_cpus(const struct acrn_vm *vm)
 }
 
 /*
- * @pre vcpu_id < CONFIG_MAX_VCPUS_PER_VM
+ * @pre vcpu_id < MAX_VCPUS_PER_VM
  * @pre &(vm->hw.vcpu_array[vcpu_id])->state != VCPU_OFFLINE
  */
 static inline struct acrn_vcpu *vcpu_from_vid(struct acrn_vm *vm, uint16_t vcpu_id)
@@ -179,7 +189,7 @@ static inline struct acrn_vcpu *vcpu_from_pid(struct acrn_vm *vm, uint16_t pcpu_
 	struct acrn_vcpu *vcpu, *target_vcpu = NULL;
 
 	foreach_vcpu(i, vm, vcpu) {
-		if (vcpu->pcpu_id == pcpu_id) {
+		if (pcpuid_from_vcpu(vcpu) == pcpu_id) {
 			target_vcpu = vcpu;
 			break;
 		}
@@ -198,22 +208,40 @@ static inline uint16_t vmid_2_rel_vmid(uint16_t sos_vmid, uint16_t vmid) {
 	return (vmid - sos_vmid);
 }
 
+/**
+ * @brief Check if the specified vdev is a zombie VF instance
+ *
+ * @param vdev Pointer to vdev instance
+ *
+ * @return If the vdev is a zombie VF instance return true, otherwise return false
+ */
+static inline bool is_zombie_vf(const struct pci_vdev *vdev)
+{
+	return (vdev->vpci == NULL);
+}
+
+void make_shutdown_vm_request(uint16_t pcpu_id);
+bool need_shutdown_vm(uint16_t pcpu_id);
 int32_t shutdown_vm(struct acrn_vm *vm);
 void pause_vm(struct acrn_vm *vm);
 void resume_vm_from_s3(struct acrn_vm *vm, uint32_t wakeup_vec);
 void start_vm(struct acrn_vm *vm);
 int32_t reset_vm(struct acrn_vm *vm);
-int32_t create_vm(uint16_t vm_id, struct acrn_vm_config *vm_config, struct acrn_vm **rtn_vm);
+int32_t create_vm(uint16_t vm_id, uint64_t pcpu_bitmap, struct acrn_vm_config *vm_config, struct acrn_vm **rtn_vm);
 void prepare_vm(uint16_t vm_id, struct acrn_vm_config *vm_config);
 void launch_vms(uint16_t pcpu_id);
 bool is_poweroff_vm(const struct acrn_vm *vm);
 bool is_created_vm(const struct acrn_vm *vm);
+bool is_paused_vm(const struct acrn_vm *vm);
 bool is_sos_vm(const struct acrn_vm *vm);
 bool is_postlaunched_vm(const struct acrn_vm *vm);
 bool is_prelaunched_vm(const struct acrn_vm *vm);
 uint16_t get_vmid_by_uuid(const uint8_t *uuid);
 struct acrn_vm *get_vm_from_vmid(uint16_t vm_id);
 struct acrn_vm *get_sos_vm(void);
+
+void create_sos_vm_e820(struct acrn_vm *vm);
+void create_prelaunched_vm_e820(struct acrn_vm *vm);
 
 int32_t direct_boot_sw_loader(struct acrn_vm *vm);
 
@@ -224,6 +252,7 @@ void vrtc_init(struct acrn_vm *vm);
 
 bool is_lapic_pt_configured(const struct acrn_vm *vm);
 bool is_rt_vm(const struct acrn_vm *vm);
+bool is_pi_capable(const struct acrn_vm *vm);
 bool has_rt_vm(void);
 bool is_highest_severity_vm(const struct acrn_vm *vm);
 bool vm_hide_mtrr(const struct acrn_vm *vm);

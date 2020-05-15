@@ -143,17 +143,6 @@ void destroy_secure_world(struct acrn_vm *vm, bool need_clr_mem)
 	}
 }
 
-static inline void save_fxstore_guest_area(struct ext_context *ext_ctx)
-{
-	asm volatile("fxsave (%0)"
-			: : "r" (ext_ctx->fxstore_guest_area) : "memory");
-}
-
-static inline void rstor_fxstore_guest_area(const struct ext_context *ext_ctx)
-{
-	asm volatile("fxrstor (%0)" : : "r" (ext_ctx->fxstore_guest_area));
-}
-
 static void save_world_ctx(struct acrn_vcpu *vcpu, struct ext_context *ext_ctx)
 {
 	uint32_t i;
@@ -204,8 +193,8 @@ static void save_world_ctx(struct acrn_vcpu *vcpu, struct ext_context *ext_ctx)
 	ext_ctx->ia32_fmask = msr_read(MSR_IA32_FMASK);
 	ext_ctx->ia32_kernel_gs_base = msr_read(MSR_IA32_KERNEL_GS_BASE);
 
-	/* FX area */
-	save_fxstore_guest_area(ext_ctx);
+	/* XSAVE area */
+	save_xsave_area(ext_ctx);
 
 	/* For MSRs need isolation between worlds */
 	for (i = 0U; i < NUM_WORLD_MSRS; i++) {
@@ -256,8 +245,8 @@ static void load_world_ctx(struct acrn_vcpu *vcpu, const struct ext_context *ext
 	msr_write(MSR_IA32_FMASK, ext_ctx->ia32_fmask);
 	msr_write(MSR_IA32_KERNEL_GS_BASE, ext_ctx->ia32_kernel_gs_base);
 
-	/* FX area */
-	rstor_fxstore_guest_area(ext_ctx);
+	/* XSAVE area */
+	rstore_xsave_area(ext_ctx);
 
 	/* For MSRs need isolation between worlds */
 	for (i = 0U; i < NUM_WORLD_MSRS; i++) {
@@ -268,10 +257,10 @@ static void load_world_ctx(struct acrn_vcpu *vcpu, const struct ext_context *ext
 static void copy_smc_param(const struct run_context *prev_ctx,
 				struct run_context *next_ctx)
 {
-	next_ctx->guest_cpu_regs.regs.rdi = prev_ctx->guest_cpu_regs.regs.rdi;
-	next_ctx->guest_cpu_regs.regs.rsi = prev_ctx->guest_cpu_regs.regs.rsi;
-	next_ctx->guest_cpu_regs.regs.rdx = prev_ctx->guest_cpu_regs.regs.rdx;
-	next_ctx->guest_cpu_regs.regs.rbx = prev_ctx->guest_cpu_regs.regs.rbx;
+	next_ctx->cpu_regs.regs.rdi = prev_ctx->cpu_regs.regs.rdi;
+	next_ctx->cpu_regs.regs.rsi = prev_ctx->cpu_regs.regs.rsi;
+	next_ctx->cpu_regs.regs.rdx = prev_ctx->cpu_regs.regs.rdx;
+	next_ctx->cpu_regs.regs.rbx = prev_ctx->cpu_regs.regs.rbx;
 }
 
 void switch_world(struct acrn_vcpu *vcpu, int32_t next_world)
@@ -344,7 +333,7 @@ static bool setup_trusty_info(struct acrn_vcpu *vcpu, uint32_t mem_size, uint64_
 			 * address(GPA) of startup_param on boot. Currently, the startup_param
 			 * is put in the first page of trusty memory just followed by key_info.
 			 */
-			vcpu->arch.contexts[SECURE_WORLD].run_ctx.guest_cpu_regs.regs.rdi
+			vcpu->arch.contexts[SECURE_WORLD].run_ctx.cpu_regs.regs.rdi
 				= (uint64_t)TRUSTY_EPT_REBASE_GPA + sizeof(struct trusty_key_info);
 
 			stac();
@@ -378,7 +367,7 @@ static bool init_secure_world_env(struct acrn_vcpu *vcpu,
 
 	vcpu->arch.inst_len = 0U;
 	vcpu->arch.contexts[SECURE_WORLD].run_ctx.rip = entry_gpa;
-	vcpu->arch.contexts[SECURE_WORLD].run_ctx.guest_cpu_regs.regs.rsp =
+	vcpu->arch.contexts[SECURE_WORLD].run_ctx.cpu_regs.regs.rsp =
 		TRUSTY_EPT_REBASE_GPA + size;
 
 	vcpu->arch.contexts[SECURE_WORLD].ext_ctx.tsc_offset = 0UL;
@@ -453,10 +442,8 @@ bool initialize_trusty(struct acrn_vcpu *vcpu, struct trusty_boot_param *boot_pa
 
 void save_sworld_context(struct acrn_vcpu *vcpu)
 {
-	(void)memcpy_s(&vcpu->vm->sworld_snapshot,
-			sizeof(struct cpu_context),
-			&vcpu->arch.contexts[SECURE_WORLD],
-			sizeof(struct cpu_context));
+	(void)memcpy_s((void *)&vcpu->vm->sworld_snapshot, sizeof(struct guest_cpu_context),
+			(void *)&vcpu->arch.contexts[SECURE_WORLD], sizeof(struct guest_cpu_context));
 }
 
 void restore_sworld_context(struct acrn_vcpu *vcpu)
@@ -469,10 +456,8 @@ void restore_sworld_context(struct acrn_vcpu *vcpu)
 		sworld_ctl->sworld_memory.length,
 		TRUSTY_EPT_REBASE_GPA);
 
-	(void)memcpy_s(&vcpu->arch.contexts[SECURE_WORLD],
-			sizeof(struct cpu_context),
-			&vcpu->vm->sworld_snapshot,
-			sizeof(struct cpu_context));
+	(void)memcpy_s((void *)&vcpu->arch.contexts[SECURE_WORLD], sizeof(struct guest_cpu_context),
+			(void *)&vcpu->vm->sworld_snapshot, sizeof(struct guest_cpu_context));
 }
 
 /**

@@ -29,23 +29,25 @@
 
 #include <vm.h>
 #include "vpci_priv.h"
+#include <ept.h>
+#include <logmsg.h>
 
 /**
  * @pre vdev != NULL
  */
-uint32_t pci_vdev_read_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes)
+uint32_t pci_vdev_read_vcfg(const struct pci_vdev *vdev, uint32_t offset, uint32_t bytes)
 {
 	uint32_t val;
 
 	switch (bytes) {
 	case 1U:
-		val = pci_vdev_read_cfg_u8(vdev, offset);
+		val = vdev->cfgdata.data_8[offset];
 		break;
 	case 2U:
-		val = pci_vdev_read_cfg_u16(vdev, offset);
+		val = vdev->cfgdata.data_16[offset >> 1U];
 		break;
 	default:
-		val = pci_vdev_read_cfg_u32(vdev, offset);
+		val = vdev->cfgdata.data_32[offset >> 2U];
 		break;
 	}
 
@@ -55,17 +57,17 @@ uint32_t pci_vdev_read_cfg(const struct pci_vdev *vdev, uint32_t offset, uint32_
 /**
  * @pre vdev != NULL
  */
-void pci_vdev_write_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val)
+void pci_vdev_write_vcfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, uint32_t val)
 {
 	switch (bytes) {
 	case 1U:
-		pci_vdev_write_cfg_u8(vdev, offset, (uint8_t)val);
+		vdev->cfgdata.data_8[offset] = (uint8_t)val;
 		break;
 	case 2U:
-		pci_vdev_write_cfg_u16(vdev, offset, (uint16_t)val);
+		vdev->cfgdata.data_16[offset >> 1U] = (uint16_t)val;
 		break;
 	default:
-		pci_vdev_write_cfg_u32(vdev, offset, val);
+		vdev->cfgdata.data_32[offset >> 2U] = val;
 		break;
 	}
 }
@@ -74,20 +76,90 @@ void pci_vdev_write_cfg(struct pci_vdev *vdev, uint32_t offset, uint32_t bytes, 
  * @pre vpci != NULL
  * @pre vpci->pci_vdev_cnt <= CONFIG_MAX_PCI_DEV_NUM
  */
-struct pci_vdev *pci_find_vdev(const struct acrn_vpci *vpci, union pci_bdf vbdf)
+struct pci_vdev *pci_find_vdev(struct acrn_vpci *vpci, union pci_bdf vbdf)
 {
 	struct pci_vdev *vdev, *tmp;
 	uint32_t i;
 
 	vdev = NULL;
 	for (i = 0U; i < vpci->pci_vdev_cnt; i++) {
-		tmp = (struct pci_vdev *)&(vpci->pci_vdevs[i]);
+		tmp = &(vpci->pci_vdevs[i]);
 
-		if (bdf_is_equal(&(tmp->bdf), &vbdf)) {
+		if (bdf_is_equal(tmp->bdf, vbdf)) {
 			vdev = tmp;
 			break;
 		}
 	}
 
 	return vdev;
+}
+
+uint32_t pci_vdev_read_vbar(const struct pci_vdev *vdev, uint32_t idx)
+{
+	uint32_t bar, offset;
+
+	offset = pci_bar_offset(idx);
+	bar = pci_vdev_read_vcfg(vdev, offset, 4U);
+	/* Sizing BAR */
+	if (bar == ~0U) {
+		bar = vdev->vbars[idx].mask | vdev->vbars[idx].fixed;
+	}
+	return bar;
+}
+
+static void pci_vdev_update_vbar_base(struct pci_vdev *vdev, uint32_t idx)
+{
+	struct pci_vbar *vbar;
+	enum pci_bar_type type;
+	uint64_t base = 0UL;
+	uint32_t lo, hi, offset;
+
+	vbar = &vdev->vbars[idx];
+	offset = pci_bar_offset(idx);
+	lo = pci_vdev_read_vcfg(vdev, offset, 4U);
+	if ((vbar->type != PCIBAR_NONE) && (lo != ~0U)) {
+		type = vbar->type;
+		base = lo & vbar->mask;
+
+		if (vbar->type == PCIBAR_MEM64) {
+			vbar = &vdev->vbars[idx + 1U];
+			hi = pci_vdev_read_vcfg(vdev, (offset + 4U), 4U);
+			if (hi != ~0U) {
+				hi &= vbar->mask;
+				base |= ((uint64_t)hi << 32U);
+			} else {
+				base = 0UL;
+			}
+		}
+		if (type == PCIBAR_IO_SPACE) {
+			base &= 0xffffUL;
+		}
+	}
+
+	if ((base != 0UL) && !ept_is_mr_valid(vpci2vm(vdev->vpci), base, vdev->vbars[idx].size)) {
+		pr_warn("%s, %x:%x.%x set invalid bar[%d] base: 0x%lx, size: 0x%lx\n", __func__,
+			vdev->bdf.bits.b, vdev->bdf.bits.d, vdev->bdf.bits.f, idx, base, vdev->vbars[idx].size);
+		base = 0UL;	/* 0UL means invalid GPA, so that EPT won't map */
+	}
+
+	vdev->vbars[idx].base_gpa = base;
+}
+
+void pci_vdev_write_vbar(struct pci_vdev *vdev, uint32_t idx, uint32_t val)
+{
+	struct pci_vbar *vbar;
+	uint32_t bar, offset;
+	uint32_t update_idx = idx;
+
+	vbar = &vdev->vbars[idx];
+	bar = val & vbar->mask;
+	bar |= vbar->fixed;
+	offset = pci_bar_offset(idx);
+	pci_vdev_write_vcfg(vdev, offset, 4U, bar);
+
+	if (vbar->type == PCIBAR_MEM64HI) {
+		update_idx -= 1U;
+	}
+
+	pci_vdev_update_vbar_base(vdev, update_idx);
 }

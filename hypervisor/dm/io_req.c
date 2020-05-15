@@ -6,24 +6,23 @@
 #include <vm.h>
 #include <irq.h>
 #include <errno.h>
-#include <ept.h>
 #include <logmsg.h>
 
-#define ACRN_DBG_IOREQUEST	6U
+#define DBG_LEVEL_IOREQ	6U
 
-static uint32_t acrn_vhm_notification_vector = VECTOR_HYPERVISOR_CALLBACK_VHM;
+static uint32_t acrn_vhm_notification_vector = HYPERVISOR_CALLBACK_VHM_VECTOR;
 #define MMIO_DEFAULT_VALUE_SIZE_1	(0xFFUL)
 #define MMIO_DEFAULT_VALUE_SIZE_2	(0xFFFFUL)
 #define MMIO_DEFAULT_VALUE_SIZE_4	(0xFFFFFFFFUL)
 #define MMIO_DEFAULT_VALUE_SIZE_8	(0xFFFFFFFFFFFFFFFFUL)
 
 #if defined(HV_DEBUG)
-static void acrn_print_request(uint16_t vcpu_id, const struct vhm_request *req)
+__unused static void acrn_print_request(uint16_t vcpu_id, const struct vhm_request *req)
 {
 	switch (req->type) {
 	case REQ_MMIO:
-		dev_dbg(ACRN_DBG_IOREQUEST, "[vcpu_id=%hu type=MMIO]", vcpu_id);
-		dev_dbg(ACRN_DBG_IOREQUEST,
+		dev_dbg(DBG_LEVEL_IOREQ, "[vcpu_id=%hu type=MMIO]", vcpu_id);
+		dev_dbg(DBG_LEVEL_IOREQ,
 			"gpa=0x%lx, R/W=%d, size=%ld value=0x%lx processed=%lx",
 			req->reqs.mmio.address,
 			req->reqs.mmio.direction,
@@ -32,8 +31,8 @@ static void acrn_print_request(uint16_t vcpu_id, const struct vhm_request *req)
 			req->processed);
 		break;
 	case REQ_PORTIO:
-		dev_dbg(ACRN_DBG_IOREQUEST, "[vcpu_id=%hu type=PORTIO]", vcpu_id);
-		dev_dbg(ACRN_DBG_IOREQUEST,
+		dev_dbg(DBG_LEVEL_IOREQ, "[vcpu_id=%hu type=PORTIO]", vcpu_id);
+		dev_dbg(DBG_LEVEL_IOREQ,
 			"IO=0x%lx, R/W=%d, size=%ld value=0x%lx processed=%lx",
 			req->reqs.pio.address,
 			req->reqs.pio.direction,
@@ -42,7 +41,7 @@ static void acrn_print_request(uint16_t vcpu_id, const struct vhm_request *req)
 			req->processed);
 		break;
 	default:
-		dev_dbg(ACRN_DBG_IOREQUEST, "[vcpu_id=%hu type=%d] NOT support type",
+		dev_dbg(DBG_LEVEL_IOREQ, "[vcpu_id=%hu type=%d] NOT support type",
 			vcpu_id, req->type);
 		break;
 	}
@@ -98,19 +97,11 @@ int32_t acrn_insert_request(struct acrn_vcpu *vcpu, const struct io_request *io_
 		vhm_req->type = io_req->io_type;
 		(void)memcpy_s(&vhm_req->reqs, sizeof(union vhm_io_request),
 			&io_req->reqs, sizeof(union vhm_io_request));
-		if (vcpu->vm->sw.is_completion_polling) {
+		if (vcpu->vm->sw.is_polling_ioreq) {
 			vhm_req->completion_polling = 1U;
 			is_polling = true;
 		}
 		clac();
-
-		/* pause vcpu in notification mode , wait for VHM to handle the MMIO request.
-		 * TODO: when pause_vcpu changed to switch vcpu out directlly, we
-		 * should fix the race issue between req.processed update and vcpu pause
-		 */
-		if (!is_polling) {
-			pause_vcpu(vcpu, VCPU_PAUSED);
-		}
 
 		/* Before updating the vhm_req state, enforce all fill vhm_req operations done */
 		cpu_write_memory_barrier();
@@ -122,34 +113,23 @@ int32_t acrn_insert_request(struct acrn_vcpu *vcpu, const struct io_request *io_
 		 */
 		set_vhm_req_state(vcpu->vm, vcpu->vcpu_id, REQ_STATE_PENDING);
 
-#if defined(HV_DEBUG)
-		stac();
-		acrn_print_request(vcpu->vcpu_id, vhm_req);
-		clac();
-#endif
-
 		/* signal VHM */
 		arch_fire_vhm_interrupt();
 
 		/* Polling completion of the request in polling mode */
 		if (is_polling) {
-			/*
-			 * Now, we only have one case that will schedule out this vcpu
-			 * from IO completion polling status, it's pause_vcpu to VCPU_ZOMBIE.
-			 * In this case, we cannot come back to polling status again. Currently,
-			 * it's OK as we needn't handle IO completion in zombie status.
-			 */
-			while (!need_reschedule(vcpu->pcpu_id)) {
+			while (true) {
 				if (has_complete_ioreq(vcpu)) {
 					/* we have completed ioreq pending */
 					break;
 				}
 				asm_pause();
+				if (need_reschedule(pcpuid_from_vcpu(vcpu))) {
+					schedule();
+				}
 			}
-		} else if (need_reschedule(vcpu->pcpu_id)) {
-			schedule();
 		} else {
-			ret = -EINVAL;
+			wait_event(&vcpu->events[VCPU_EVENT_IOREQ]);
 		}
 	} else {
 		ret = -EINVAL;
@@ -420,8 +400,13 @@ hv_emulate_pio(struct acrn_vcpu *vcpu, struct io_request *io_req)
 	struct acrn_vm *vm = vcpu->vm;
 	struct pio_request *pio_req = &io_req->reqs.pio;
 	struct vm_io_handler_desc *handler;
-	io_read_fn_t io_read = vm->default_io_read;
-	io_write_fn_t io_write = vm->default_io_write;
+	io_read_fn_t io_read = NULL;
+	io_write_fn_t io_write = NULL;
+
+	if (is_sos_vm(vcpu->vm) || is_prelaunched_vm(vcpu->vm)) {
+		io_read = pio_default_read;
+		io_write = pio_default_write;
+	}
 
 	port = (uint16_t)pio_req->address;
 	size = (uint16_t)pio_req->size;
@@ -474,46 +459,57 @@ static int32_t
 hv_emulate_mmio(struct acrn_vcpu *vcpu, struct io_request *io_req)
 {
 	int32_t status = -ENODEV;
+	bool hold_lock = true;
 	uint16_t idx;
-	uint64_t address, size;
+	uint64_t address, size, base, end;
 	struct mmio_request *mmio_req = &io_req->reqs.mmio;
 	struct mem_io_node *mmio_handler = NULL;
-	hv_mem_io_handler_t read_write = vcpu->vm->default_read_write;
+	hv_mem_io_handler_t read_write = NULL;
 	void *handler_private_data = NULL;
+
+	if (is_sos_vm(vcpu->vm) || is_prelaunched_vm(vcpu->vm)) {
+		read_write = mmio_default_access_handler;
+	}
 
 	address = mmio_req->address;
 	size = mmio_req->size;
 
-	for (idx = 0U; idx < vcpu->vm->emul_mmio_regions; idx++) {
-		uint64_t base, end;
-		bool emulation_done = false;
-
+	spinlock_obtain(&vcpu->vm->emul_mmio_lock);
+	for (idx = 0U; idx <= vcpu->vm->max_emul_mmio_regions; idx++) {
 		mmio_handler = &(vcpu->vm->emul_mmio[idx]);
-		base = mmio_handler->range_start;
-		end = mmio_handler->range_end;
+		if (mmio_handler->read_write != NULL) {
+			base = mmio_handler->range_start;
+			end = mmio_handler->range_end;
 
-		if (((address + size) <= base) || (address >= end)) {
-			continue;
-		} else if (!((address >= base) && ((address + size) <= end))) {
-			pr_fatal("Err MMIO, address:0x%llx, size:%x", address, size);
-			status = -EIO;
-			emulation_done = true;
-		} else {
-			if (mmio_handler->read_write != NULL) {
-				read_write = mmio_handler->read_write;
-				handler_private_data = mmio_handler->handler_private_data;
-				emulation_done = true;
+			if (((address + size) <= base) || (address >= end)) {
+				continue;
+			} else {
+				 if ((address >= base) && ((address + size) <= end)) {
+					hold_lock = mmio_handler->hold_lock;
+					read_write = mmio_handler->read_write;
+					handler_private_data = mmio_handler->handler_private_data;
+				} else {
+					pr_fatal("Err MMIO, address:0x%lx, size:%x", address, size);
+					status = -EIO;
+				}
+				break;
 			}
-		}
-
-		if (emulation_done) {
-			break;
 		}
 	}
 
 	if ((status == -ENODEV) && (read_write != NULL)) {
+		/* This mmio_handler will never modify once register, so we don't
+		 * need to hold the lock when handling the MMIO access.
+		 */
+		if (!hold_lock) {
+			spinlock_release(&vcpu->vm->emul_mmio_lock);
+		}
 		status = read_write(io_req, handler_private_data);
+		if (!hold_lock) {
+			spinlock_obtain(&vcpu->vm->emul_mmio_lock);
+		}
 	}
+	spinlock_release(&vcpu->vm->emul_mmio_lock);
 
 	return status;
 }
@@ -580,8 +576,7 @@ emulate_io(struct acrn_vcpu *vcpu, struct io_request *io_req)
 			 */
 			struct pio_request *pio_req = &io_req->reqs.pio;
 
-			pr_fatal("%s Err: access dir %d, io_type %d, "
-				"addr = 0x%llx, size=%lu", __func__,
+			pr_fatal("%s Err: access dir %d, io_type %d, addr = 0x%lx, size=%lu", __func__,
 				pio_req->direction, io_req->io_type,
 				pio_req->address, pio_req->size);
 		}
@@ -614,10 +609,66 @@ void register_pio_emulation_handler(struct acrn_vm *vm, uint32_t pio_idx,
 }
 
 /**
+ * @brief Find match MMIO node
+ *
+ * This API find match MMIO node from \p vm.
+ *
+ * @param vm The VM to which the MMIO node is belong to.
+ *
+ * @return If there's a match mmio_node return it, otherwise return NULL;
+ */
+static inline struct mem_io_node *find_match_mmio_node(struct acrn_vm *vm,
+				uint64_t start, uint64_t end)
+{
+	bool found = false;
+	uint16_t idx;
+	struct mem_io_node *mmio_node;
+
+	for (idx = 0U; idx < CONFIG_MAX_EMULATED_MMIO_REGIONS; idx++) {
+		mmio_node = &(vm->emul_mmio[idx]);
+		if ((mmio_node->range_start == start) && (mmio_node->range_end == end)) {
+			found = true;
+			break;
+		}
+	}
+
+	if (!found) {
+		pr_fatal("%s, vm[%d] no match mmio region [0x%lx, 0x%lx] is found",
+				__func__, vm->vm_id, start, end);
+		mmio_node = NULL;
+	}
+
+	return mmio_node;
+}
+
+/**
+ * @brief Find a free MMIO node
+ *
+ * This API find a free MMIO node from \p vm.
+ *
+ * @param vm The VM to which the MMIO node is belong to.
+ *
+ * @return If there's a free mmio_node return it, otherwise return NULL;
+ */
+static inline struct mem_io_node *find_free_mmio_node(struct acrn_vm *vm)
+{
+	uint16_t idx;
+	struct mem_io_node *mmio_node = find_match_mmio_node(vm, 0UL, 0UL);
+
+	if (mmio_node != NULL) {
+		idx = (uint16_t)(uint64_t)(mmio_node - &(vm->emul_mmio[0U]));
+		if (vm->max_emul_mmio_regions < idx) {
+			vm->max_emul_mmio_regions = idx;
+		}
+	}
+
+	return mmio_node;
+}
+
+/**
  * @brief Register a MMIO handler
  *
- * This API registers a MMIO handler to \p vm before it is Started
- * For Pre-launched VMs, this API can be called after it is Started
+ * This API registers a MMIO handler to \p vm
  *
  * @param vm The VM to which the MMIO handler is registered
  * @param read_write The handler for emulating accesses to the given range
@@ -629,55 +680,47 @@ void register_pio_emulation_handler(struct acrn_vm *vm, uint32_t pio_idx,
  */
 void register_mmio_emulation_handler(struct acrn_vm *vm,
 	hv_mem_io_handler_t read_write, uint64_t start,
-	uint64_t end, void *handler_private_data)
+	uint64_t end, void *handler_private_data, bool hold_lock)
 {
 	struct mem_io_node *mmio_node;
 
 	/* Ensure both a read/write handler and range check function exist */
 	if ((read_write != NULL) && (end > start)) {
-		if (vm->emul_mmio_regions >= CONFIG_MAX_EMULATED_MMIO_REGIONS) {
-			pr_err("the emulated mmio region is out of range");
-		} else {
-			mmio_node = &(vm->emul_mmio[vm->emul_mmio_regions]);
+		spinlock_obtain(&vm->emul_mmio_lock);
+		mmio_node = find_free_mmio_node(vm);
+		if (mmio_node != NULL) {
 			/* Fill in information for this node */
+			mmio_node->hold_lock = hold_lock;
 			mmio_node->read_write = read_write;
 			mmio_node->handler_private_data = handler_private_data;
 			mmio_node->range_start = start;
 			mmio_node->range_end = end;
-
-			(vm->emul_mmio_regions)++;
-
-			/*
-			 * SOS would map all its memory at beginning, so we
-			 * should unmap it. But UOS will not, so we shouldn't
-			 * need to unmap it.
-			 */
-			if (is_sos_vm(vm)) {
-				ept_del_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp, start, end - start);
-			}
-
 		}
+		spinlock_release(&vm->emul_mmio_lock);
 	}
 
 }
 
 /**
- * @brief Register port I/O default handler
+ * @brief Unregister a MMIO handler
  *
- * @param vm      The VM to which the port I/O handlers are registered
+ * This API unregisters a MMIO handler to \p vm
+ *
+ * @param vm The VM to which the MMIO handler is unregistered
+ * @param start The base address of the range which wants to unregister
+ * @param end The end of the range (exclusive) which wants to unregister
+ *
+ * @return None
  */
-void register_pio_default_emulation_handler(struct acrn_vm *vm)
+void unregister_mmio_emulation_handler(struct acrn_vm *vm,
+					uint64_t start, uint64_t end)
 {
-	vm->default_io_read = pio_default_read;
-	vm->default_io_write = pio_default_write;
-}
+	struct mem_io_node *mmio_node;
 
-/**
- * @brief Register MMIO default handler
- *
- * @param vm The VM to which the MMIO handler is registered
- */
-void register_mmio_default_emulation_handler(struct acrn_vm *vm)
-{
-	vm->default_read_write = mmio_default_access_handler;
+	spinlock_obtain(&vm->emul_mmio_lock);
+	mmio_node = find_match_mmio_node(vm, start, end);
+	if (mmio_node != NULL) {
+		(void)memset(mmio_node, 0U, sizeof(struct mem_io_node));
+	}
+	spinlock_release(&vm->emul_mmio_lock);
 }

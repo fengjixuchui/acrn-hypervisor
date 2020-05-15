@@ -94,14 +94,10 @@ static inline void hv_jump(EFI_PHYSICAL_ADDRESS hv_start,
 
 	efi_ctx->vcpu_regs.rip = (uint64_t)&guest_entry;
 
-	/* The 64-bit entry of acrn hypervisor is 0x200 from the start
-	 * address of hv image. But due to there is multiboot header,
-	 * so it has to be added with 0x10.
-	 *
-	 * FIXME: The hardcode value 0x210 should be worked out
-	 * from the link address of cpu_primary_start_64 in acrn.out
+	/* The 64-bit entry of acrn hypervisor is 0x1200 from the start
+	 * address of hv image.
 	 */
-	hf = (hv_func)(hv_start + 0x210);
+	hf = (hv_func)(hv_start + 0x1200);
 
 	asm volatile ("cli");
 
@@ -347,7 +343,53 @@ static inline EFI_STATUS isspace(CHAR8 ch)
     return ((uint8_t)ch <= ' ');
 }
 
-#define DEFAULT_UEFI_OS_LOADER_NAME L"\\EFI\\org.clearlinux\\bootloaderx64.efi"
+EFI_STATUS reserve_unconfigure_high_memory(void)
+{
+#define PLATFORM_LO_MMIO_SIZE	0x80000000UL
+	UINTN map_size, map_key, desc_size;
+	EFI_MEMORY_DESCRIPTOR *map_buf;
+	UINTN d, map_end;
+	UINTN i;
+	UINT32 desc_version;
+	EFI_STATUS err;
+	UINT64 reserved_hpa;
+	EFI_PHYSICAL_ADDRESS top_addr_space = CONFIG_PLATFORM_RAM_SIZE + PLATFORM_LO_MMIO_SIZE;
+
+	err = memory_map(&map_buf, &map_size, &map_key, &desc_size, &desc_version);
+	if (err != EFI_SUCCESS)
+		goto fail;
+
+	d = (UINTN)map_buf;
+	map_end = (UINTN)map_buf + map_size;
+
+	for (i = 0; d < map_end; d += desc_size, i++) {
+		EFI_MEMORY_DESCRIPTOR *desc;
+		EFI_PHYSICAL_ADDRESS start, end;
+
+		desc = (EFI_MEMORY_DESCRIPTOR *)d;
+		if (desc->Type != EfiConventionalMemory)
+			continue;
+
+		start = desc->PhysicalStart;
+		end = start + (desc->NumberOfPages << EFI_PAGE_SHIFT);
+
+		if (end > top_addr_space) {
+			if (start < top_addr_space)
+				start = top_addr_space;
+			err = emalloc_fixed_addr(&reserved_hpa, end - start, start);
+			Print(L"memory region (%lx, %lx) is truncated from region (%lx, %lx).",
+					start, end, desc->PhysicalStart, end);
+			if (err != EFI_SUCCESS)
+				break;
+		}
+	}
+
+	free_pool(map_buf);
+fail:
+	return err;
+
+}
+
 /**
  * efi_main - The entry point for the OS loader image.
  * @image: firmware-allocated handle that identifies the image
@@ -364,12 +406,12 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *_table)
 	char *section;
 	EFI_DEVICE_PATH *path;
 
-	INTN i, index;
+	INTN index;
 	CHAR16 *bootloader_name = NULL;
 	CHAR16 bootloader_param[] = L"bootloader=";
 	EFI_HANDLE bootloader_image;
 	CHAR16 *options = NULL;
-	UINT32 options_size = 0;
+	UINT32 options_size = 0, bootloader_name_off = 0;
 	CHAR16 *cmdline16, *n;
 
 	InitializeLib(image, _table);
@@ -399,12 +441,16 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *_table)
 	 */
 	cmdline16 = StrDuplicate(options);
 	bootloader_name = strstr_16(cmdline16, bootloader_param, StrLen(bootloader_param));
+
 	if (bootloader_name) {
 		bootloader_name = bootloader_name + StrLen(bootloader_param);
+		bootloader_name_off = bootloader_name - cmdline16;
+
+		bootloader_name_off *= sizeof(CHAR16);
+
 		n = bootloader_name;
-		i = 0;
-		while (*n && !isspace((CHAR8)*n) && (*n < 0xff)) {
-			n++; i++;
+		while (*n && !isspace((CHAR8)*n) && (*n < 0xff) && (bootloader_name_off < options_size)) {
+			n++; bootloader_name_off += sizeof(CHAR16);
 		}
 		*n++ = '\0';
 	} else {
@@ -413,14 +459,20 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *_table)
 		 * bootloader name to be used. Fall back to the default bootloader
 		 * as specified in config.h
 		 */
-		bootloader_name = DEFAULT_UEFI_OS_LOADER_NAME;
+		bootloader_name = ch8_2_ch16(CONFIG_UEFI_OS_LOADER_NAME, strlen(CONFIG_UEFI_OS_LOADER_NAME));
 	}
 
 	section = ".hv";
 	err = get_pe_section(info->ImageBase, section, strlen(section), &sec_addr, &sec_size);
 	if (EFI_ERROR(err)) {
 		Print(L"Unable to locate section of ACRNHV %r ", err);
-		goto failed;
+		goto free_args;
+	}
+
+	err = reserve_unconfigure_high_memory();
+	if (err != EFI_SUCCESS) {
+		Print(L"Unable to reserve un-configure high memory %r ", err);
+		goto free_args;
 	}
 
 	/* without relocateion enabled, hypervisor binary need to reside in
@@ -429,21 +481,25 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *_table)
 	 * hypervisor is able to do relocation, the only requirement is that
 	 * it need to reside in memory below 4GB, call emalloc_reserved_mem()
 	 * instead.
+	 *
+	 * Don't relocate hypervisor binary under 256MB, which could be where
+	 * guest Linux kernel boots from, and other usage, e.g. hvlog buffer
 	 */
 #ifdef CONFIG_RELOC
-	err = emalloc_reserved_aligned(&hv_hpa, CONFIG_HV_RAM_SIZE, 1 << 21, MEM_ADDR_4GB);
+	err = emalloc_reserved_aligned(&hv_hpa, CONFIG_HV_RAM_SIZE, 2U * MEM_ADDR_1MB,
+		256U * MEM_ADDR_1MB, MEM_ADDR_4GB);
 #else
 	err = emalloc_fixed_addr(&hv_hpa, CONFIG_HV_RAM_SIZE, CONFIG_HV_RAM_START);
 #endif
 	if (err != EFI_SUCCESS)
-		goto failed;
+		goto free_args;
 
 	memcpy((char *)hv_hpa, info->ImageBase + sec_addr, sec_size);
 
 	/* load hypervisor and begin to run on it */
 	err = switch_to_guest_mode(image, hv_hpa);
 	if (err != EFI_SUCCESS)
-		goto failed;
+		goto free_args;
 
 	/*
 	 * enable all AP here will reset all APs,
@@ -456,7 +512,7 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *_table)
 	if (!path)
 		goto free_args;
 
-	FreePool(bootloader_name);
+	FreePool(cmdline16);
 
 	err = uefi_call_wrapper(boot->LoadImage, 6, FALSE, image,
 		path, NULL, 0, &bootloader_image);
@@ -476,7 +532,7 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *_table)
 	return EFI_SUCCESS;
 
 free_args:
-	FreePool(bootloader_name);
+	FreePool(cmdline16);
 failed:
 	/*
 	 * We need to be careful not to trash 'err' here. If we fail

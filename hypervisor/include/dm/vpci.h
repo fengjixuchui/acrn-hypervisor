@@ -30,8 +30,18 @@
 #ifndef VPCI_H_
 #define VPCI_H_
 
+#include <spinlock.h>
 #include <pci.h>
 
+
+struct pci_vbar {
+	enum pci_bar_type type;
+	uint64_t size;		/* BAR size */
+	uint64_t base_gpa;	/* BAR guest physical address */
+	uint64_t base_hpa;	/* BAR host physical address */
+	uint32_t fixed;		/* BAR fix memory type encoding */
+	uint32_t mask;		/* BAR size mask */
+};
 
 struct msix_table_entry {
 	uint64_t	addr;
@@ -41,6 +51,7 @@ struct msix_table_entry {
 
 /* MSI capability structure */
 struct pci_msi {
+	bool      is_64bit;
 	uint32_t  capoff;
 	uint32_t  caplen;
 };
@@ -58,10 +69,22 @@ struct pci_msix {
 	uint32_t  table_count;
 };
 
+/* SRIOV capability structure */
+struct pci_cap_sriov {
+	uint32_t  capoff;
+	uint32_t  caplen;
+
+	/*
+	 * If the vdev is a SRIOV PF vdev, the vbars is used to store
+	 * the bar information that is using to initialize SRIOV VF vdev bar.
+	 */
+	struct pci_vbar vbars[PCI_BAR_COUNT];
+};
+
 union pci_cfgdata {
-	uint8_t data_8[PCI_REGMAX + 1U];
-	uint16_t data_16[(PCI_REGMAX + 1U) >> 2U];
-	uint32_t data_32[(PCI_REGMAX + 1U) >> 4U];
+	uint8_t data_8[PCIE_CONFIG_SPACE_SIZE];
+	uint16_t data_16[PCIE_CONFIG_SPACE_SIZE >> 1U];
+	uint32_t data_32[PCIE_CONFIG_SPACE_SIZE >> 2U];
 };
 
 struct pci_vdev;
@@ -73,7 +96,7 @@ struct pci_vdev_ops {
 };
 
 struct pci_vdev {
-	const struct acrn_vpci *vpci;
+	struct acrn_vpci *vpci;
 	/* The bus/device/function triple of the virtual PCI device. */
 	union pci_bdf bdf;
 
@@ -81,15 +104,18 @@ struct pci_vdev {
 
 	union pci_cfgdata cfgdata;
 
+	uint32_t flags;
+
 	/* The bar info of the virtual PCI device. */
 	uint32_t nr_bars; /* 6 for normal device, 2 for bridge, 1 for cardbus */
-	struct pci_bar bar[PCI_BAR_COUNT];
-
-	/* Remember the previously mapped/registered vbar base for undo purpose */
-	uint64_t bar_base_mapped[PCI_BAR_COUNT];
+	struct pci_vbar vbars[PCI_BAR_COUNT];
 
 	struct pci_msi msi;
 	struct pci_msix msix;
+	struct pci_cap_sriov sriov;
+
+	/* Pointer to the SRIOV VF associated PF's vdev */
+	struct pci_vdev *phyfun;
 
 	/* Pointer to corresponding PCI device's vm_config */
 	struct acrn_vm_pci_dev_config *pci_dev_config;
@@ -97,27 +123,46 @@ struct pci_vdev {
 	/* Pointer to corressponding operations */
 	const struct pci_vdev_ops *vdev_ops;
 
-	/* For SOS, if the device is latterly assigned to a UOS, we use this field to track the new owner. */
-	struct pci_vdev *new_owner;
+	/*
+	 * vdev in    |   HV       |   pre-VM       |               SOS                   | post-VM
+	 *            |            |                |vdev used by SOS|vdev used by post-VM|
+	 * -----------------------------------------------------------------------------------------------
+	 * parent_user| NULL(HV)   |   NULL(HV)     |   NULL(HV)     |   NULL(HV)         | vdev in SOS
+	 * -----------------------------------------------------------------------------------------------
+	 * user       | vdev in HV | vdev in pre-VM |   vdev in SOS  |   vdev in post-VM  | vdev in post-VM
+	 */
+	struct pci_vdev *parent_user;
+	struct pci_vdev *user;
 };
 
-struct pci_addr_info {
-	union pci_bdf cached_bdf;
-	uint32_t cached_reg;
-	bool cached_enable;
+union pci_cfg_addr_reg {
+	uint32_t value;
+	struct {
+		uint32_t reg_num : 8;	/* BITs 0-7, Register Number (BITs 0-1, always reserve to 0) */
+		uint32_t bdf : 16;	/* BITs 8-23, BDF Number */
+		uint32_t resv : 7;	/* BITs 24-30, Reserved */
+		uint32_t enable : 1;	/* BITs 31, Enable bit */
+	} bits;
 };
 
 struct acrn_vpci {
-	struct acrn_vm *vm;
-	struct pci_addr_info addr_info;
+	spinlock_t lock;
+	union pci_cfg_addr_reg addr;
+	uint64_t pci_mmcfg_base;
 	uint32_t pci_vdev_cnt;
 	struct pci_vdev pci_vdevs[CONFIG_MAX_PCI_DEV_NUM];
 };
 
+struct acrn_vm;
+
 extern const struct pci_vdev_ops vhostbridge_ops;
-void vpci_init(struct acrn_vm *vm);
-void vpci_cleanup(const struct acrn_vm *vm);
-void vpci_set_ptdev_intr_info(struct acrn_vm *target_vm, uint16_t vbdf, uint16_t pbdf);
-void vpci_reset_ptdev_intr_info(const struct acrn_vm *target_vm, uint16_t vbdf, uint16_t pbdf);
+extern const struct pci_vdev_ops vpci_bridge_ops;
+void init_vpci(struct acrn_vm *vm);
+void deinit_vpci(struct acrn_vm *vm);
+struct pci_vdev *pci_find_vdev(struct acrn_vpci *vpci, union pci_bdf vbdf);
+struct acrn_assign_pcidev;
+int32_t vpci_assign_pcidev(struct acrn_vm *tgt_vm, struct acrn_assign_pcidev *pcidev);
+int32_t vpci_deassign_pcidev(struct acrn_vm *tgt_vm, struct acrn_assign_pcidev *pcidev);
+struct pci_vdev *vpci_init_vdev(struct acrn_vpci *vpci, struct acrn_vm_pci_dev_config *dev_config, struct pci_vdev *parent_pf_vdev);
 
 #endif /* VPCI_H_ */

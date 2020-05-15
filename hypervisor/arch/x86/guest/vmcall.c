@@ -96,12 +96,7 @@ static int32_t dispatch_sos_hypercall(const struct acrn_vcpu *vcpu)
 		break;
 
 	case HC_CREATE_VCPU:
-		/* param1: relative vmid to sos, vm_id: absolute vmid */
-		if (vmid_is_valid) {
-			spinlock_obtain(&vmm_hypercall_lock);
-			ret = hcall_create_vcpu(sos_vm, vm_id, param2);
-			spinlock_release(&vmm_hypercall_lock);
-		}
+		ret = 0;
 		break;
 
 	case HC_SET_VCPU_REGS:
@@ -172,17 +167,17 @@ static int32_t dispatch_sos_hypercall(const struct acrn_vcpu *vcpu)
 		}
 		break;
 
-	case HC_ASSIGN_PTDEV:
+	case HC_ASSIGN_PCIDEV:
 		/* param1: relative vmid to sos, vm_id: absolute vmid */
 		if (vmid_is_valid) {
-			ret = hcall_assign_ptdev(sos_vm, vm_id, param2);
+			ret = hcall_assign_pcidev(sos_vm, vm_id, param2);
 		}
 		break;
 
-	case HC_DEASSIGN_PTDEV:
+	case HC_DEASSIGN_PCIDEV:
 		/* param1: relative vmid to sos, vm_id: absolute vmid */
 		if (vmid_is_valid) {
-			ret = hcall_deassign_ptdev(sos_vm, vm_id, param2);
+			ret = hcall_deassign_pcidev(sos_vm, vm_id, param2);
 		}
 		break;
 
@@ -232,7 +227,7 @@ int32_t vmcall_vmexit_handler(struct acrn_vcpu *vcpu)
 	uint64_t hypcall_id = vcpu_get_gpreg(vcpu, CPU_REG_R8);
 
 	if (!is_hypercall_from_ring0()) {
-		pr_err("hypercall is only allowed from RING-0!\n");
+		pr_err("hypercall 0x%lx is only allowed from RING-0!\n", hypcall_id);
 		vcpu_inject_gp(vcpu, 0U);
 		ret = -EACCES;
 	} else if (hypcall_id == HC_WORLD_SWITCH) {
@@ -248,7 +243,7 @@ int32_t vmcall_vmexit_handler(struct acrn_vcpu *vcpu)
 		/* Dispatch the hypercall handler */
 		ret = dispatch_sos_hypercall(vcpu);
 	} else  {
-		pr_err("hypercall %d is only allowed from SOS_VM!\n", hypcall_id);
+		pr_err("hypercall 0x%lx is only allowed from SOS_VM!\n", hypcall_id);
 		vcpu_inject_ud(vcpu);
 		ret = -ENODEV;
 	}

@@ -4,17 +4,17 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include <multiboot.h>
 #include <vm.h>
 #include <types.h>
 #include <pgtable.h>
 #include <acpi.h>
+#include <boot.h>
 #include <vboot.h>
 #include <direct_boot.h>
 #include <deprivilege_boot.h>
 #include <logmsg.h>
 
-#define BOOTLOADER_NUM 4U
+#define BOOTLOADER_NUM 5U
 #define BOOTLOADER_NAME_SIZE 20U
 
 struct vboot_bootloader_map {
@@ -31,8 +31,7 @@ static enum vboot_mode sos_boot_mode;
  */
 void init_vboot(void)
 {
-
-	struct multiboot_info *mbi;
+	struct acrn_multiboot_info *mbi = get_multiboot_info();
 	uint32_t i;
 
 	const struct vboot_bootloader_map vboot_bootloader_maps[BOOTLOADER_NUM] = {
@@ -40,25 +39,22 @@ void init_vboot(void)
 		{"Intel IOTG/TSD ABL", DIRECT_BOOT_MODE},
 		{"ACRN UEFI loader", DEPRI_BOOT_MODE},
 		{"GRUB", DIRECT_BOOT_MODE},
+		{"PXELINUX", DIRECT_BOOT_MODE},
 	};
 
-	mbi = (struct multiboot_info *)hpa2hva((uint64_t)boot_regs[1]);
-	if (mbi == NULL) {
-		panic("No multiboot info");
-	} else {
-		for (i = 0U; i < BOOTLOADER_NUM; i++) {
-			if (strncmp(hpa2hva(mbi->mi_loader_name), vboot_bootloader_maps[i].bootloader_name,
-				strnlen_s(vboot_bootloader_maps[i].bootloader_name, BOOTLOADER_NAME_SIZE)) == 0) {
-				/* Only support two vboot mode */
-				if (vboot_bootloader_maps[i].mode == DEPRI_BOOT_MODE) {
-					vboot_ops = get_deprivilege_boot_ops();
-					sos_boot_mode = DEPRI_BOOT_MODE;
-				} else {
-					vboot_ops = get_direct_boot_ops();
-					sos_boot_mode = DIRECT_BOOT_MODE;
-				}
-				break;
+	printf("Detect bootloader: %s\n", mbi->mi_loader_name);
+	for (i = 0U; i < BOOTLOADER_NUM; i++) {
+		if (strncmp(mbi->mi_loader_name, vboot_bootloader_maps[i].bootloader_name,
+			strnlen_s(vboot_bootloader_maps[i].bootloader_name, BOOTLOADER_NAME_SIZE)) == 0) {
+			/* Only support two vboot mode */
+			if (vboot_bootloader_maps[i].mode == DEPRI_BOOT_MODE) {
+				vboot_ops = get_deprivilege_boot_ops();
+				sos_boot_mode = DEPRI_BOOT_MODE;
+			} else {
+				vboot_ops = get_direct_boot_ops();
+				sos_boot_mode = DIRECT_BOOT_MODE;
 			}
+			break;
 		}
 	}
 
@@ -68,9 +64,6 @@ void init_vboot(void)
 	 * initialized before calling other vboot_ops interface.
 	 */
 	vboot_ops->init();
-#ifdef CONFIG_ACPI_PARSE_ENABLED
-	acpi_fixup();
-#endif
 }
 
 /* @pre: vboot_ops != NULL */

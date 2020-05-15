@@ -19,6 +19,7 @@ CFLAGS += -Wall -ffunction-sections
 CFLAGS += -Werror
 CFLAGS += -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2
 CFLAGS += -Wformat -Wformat-security -fno-strict-aliasing
+CFLAGS += -fno-delete-null-pointer-checks -fwrapv
 CFLAGS += -fpie
 CFLAGS += -Wno-stringop-truncation -Wno-address-of-packed-member
 
@@ -92,6 +93,7 @@ SRCS += hw/platform/ioapic.c
 SRCS += hw/platform/cmos_io.c
 SRCS += hw/platform/ioc.c
 SRCS += hw/platform/ioc_cbc.c
+SRCS += hw/platform/pty_vuart.c
 SRCS += hw/platform/acpi/acpi.c
 SRCS += hw/platform/acpi/acpi_pm.c
 SRCS += hw/platform/rpmb/rpmb_sim.c
@@ -140,6 +142,7 @@ SRCS += core/sw_load_elf.c
 SRCS += core/mevent.c
 SRCS += core/gc.c
 SRCS += core/pm.c
+SRCS += core/pm_vuart.c
 SRCS += core/console.c
 SRCS += core/inout.c
 SRCS += core/mem.c
@@ -153,6 +156,7 @@ SRCS += core/timer.c
 
 # arch
 SRCS += arch/x86/pm.c
+SRCS += arch/x86/power_button.c
 
 # log
 SRCS += log/log.c

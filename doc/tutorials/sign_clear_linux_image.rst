@@ -1,7 +1,7 @@
 .. _sign_clear_linux_image:
 
-How to sign binaries of the Clear Linux image
-#############################################
+Sign Clear Linux Image Binaries
+###############################
 
 In this tutorial, you will see how to sign the binaries of a Clear Linux image so that you can
 boot it through a secure boot enabled OVMF.
@@ -19,7 +19,7 @@ Prerequisites
   $ unxz clear-29880-kvm.img.xz
 
 * Download script `sign_image.sh
-  <https://raw.githubusercontent.com/projectacrn/acrn-hypervisor/master/doc/scripts/>`_ on Ubuntu.
+  <https://raw.githubusercontent.com/projectacrn/acrn-hypervisor/master/doc/scripts/sign_image.sh>`_ on Ubuntu.
 
 Steps to sign the binaries of the Clear Linux image
 ***************************************************

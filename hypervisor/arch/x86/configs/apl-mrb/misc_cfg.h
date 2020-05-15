@@ -7,6 +7,9 @@
 #ifndef MISC_CFG_H
 #define MISC_CFG_H
 
+#define MAX_PCPU_NUM	4U
+#define MAX_PLATFORM_CLOS_NUM	0U
+
 #define ROOTFS_0		"root=/dev/sda3 "
 #define ROOTFS_1		"root=/dev/mmcblk1p1 "
 
@@ -18,9 +21,9 @@
 #define SOS_COM2_IRQ		10U
 
 #ifndef CONFIG_RELEASE
-#define BOOTARG_DEBUG		"hvlog=2M@0x6de00000 "	\
-				"memmap=0x400000$0x6da00000 "	\
-				"ramoops.mem_address=0x6da00000 "	\
+#define BOOTARG_DEBUG		"hvlog=2M@0xe00000 "	\
+				"memmap=0x600000$0xa00000 "	\
+				"ramoops.mem_address=0xa00000 "	\
 				"ramoops.mem_size=0x400000 "	\
 				"ramoops.console_size=0x200000 "	\
 				"reboot_panic=p,w "
@@ -36,5 +39,10 @@
 				"video=DP-2:d "	\
 				"cma=64M@0- "	\
 				"panic_print=0x1f"
+
+#define MAX_HIDDEN_PDEVS_NUM	1U
+
+#define HI_MMIO_START		~0UL
+#define HI_MMIO_END		0UL
 
 #endif /* MISC_CFG_H */

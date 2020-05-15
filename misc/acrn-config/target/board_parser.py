@@ -8,17 +8,18 @@ import sys
 import shutil
 import argparse
 import subprocess
-import parser_lib
 import pci_dev
 import dmi
 import acpi
 import clos
+import misc
+import parser_lib
 
 OUTPUT = "./out/"
 PY_CACHE = "__pycache__"
 
 # This file store information which query from hw board
-BIN_LIST = ['cpuid', 'rdmsr', 'lspci', ' dmidecode']
+BIN_LIST = ['cpuid', 'rdmsr', 'lspci', ' dmidecode', 'blkid', 'stty']
 PCI_IDS = ["/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids"]
 
 CPU_VENDOR = "GenuineIntel"
@@ -27,14 +28,14 @@ CPU_VENDOR = "GenuineIntel"
 def check_permission():
     """Check if it is root permission"""
     if os.getuid():
-        parser_lib.print_red("You need run with sudo!")
+        parser_lib.print_red("You need run this tool with root privileges (sudo)!")
         sys.exit(1)
 
 
 def native_check():
     """Check if this is natvie os"""
     cmd = "cpuid -r -l 0x01"
-    res = parser_lib.cmd_excute(cmd)
+    res = parser_lib.cmd_execute(cmd)
     while True:
         line = parser_lib.decode_stdout(res)
 
@@ -57,7 +58,7 @@ def vendor_check():
             if len(line.split(':')) == 2:
                 if line.split(':')[0].strip() == "vendor_id":
                     vendor_name = line.split(':')[1].strip()
-                    return vendor_name != CPU_VENDOR
+                    return vendor_name == CPU_VENDOR
 
 
 def check_env():
@@ -66,7 +67,7 @@ def check_env():
         shutil.rmtree(PY_CACHE)
 
     # check cpu vendor id
-    if vendor_check():
+    if not vendor_check():
         parser_lib.print_red("Please run this tools on {}!".format(CPU_VENDOR))
         sys.exit(1)
 
@@ -91,9 +92,8 @@ def check_env():
                 parser_lib.print_yel("Need CPUID version >= 20170122")
                 sys.exit(1)
 
-
     if not native_check():
-        parser_lib.print_red("Please run this tools on natvie OS!")
+        parser_lib.print_red("Please run this tools in a native OS environment!")
         sys.exit(1)
 
     if not os.path.exists(PCI_IDS[0]) and not os.path.exists(PCI_IDS[1]):
@@ -111,7 +111,7 @@ if __name__ == '__main__':
 
     # arguments to parse
     PARSER = argparse.ArgumentParser(usage='%(prog)s <board_name> [--out board_info_file]')
-    PARSER.add_argument('board_name', help=":  the name of board that run ACRN hypervisor")
+    PARSER.add_argument('board_name', help=":  the name of the board that runs the ACRN hypervisor")
     PARSER.add_argument('--out', help=":  the name of board info file.")
     ARGS = PARSER.parse_args()
 
@@ -136,7 +136,10 @@ if __name__ == '__main__':
     # Generate clos info
     clos.generate_info(BOARD_INFO)
 
+    # Generate misc info
+    misc.generate_info(BOARD_INFO)
+
     with open(BOARD_INFO, 'a+') as f:
         print("</acrn-config>", file=f)
 
-    print("{} is generaged successfully!".format(BOARD_INFO))
+    print("{} has been generated successfully!".format(BOARD_INFO))

@@ -50,10 +50,8 @@
 #define GUEST_FLAG_SECURE_WORLD_ENABLED		(1UL << 0U)	/* Whether secure world is enabled */
 #define GUEST_FLAG_LAPIC_PASSTHROUGH		(1UL << 1U)  	/* Whether LAPIC is passed through */
 #define GUEST_FLAG_IO_COMPLETION_POLLING	(1UL << 2U)  	/* Whether need hypervisor poll IO completion */
-#define GUEST_FLAG_CLOS_REQUIRED		(1UL << 3U)     /* Whether CLOS is required */
-#define GUEST_FLAG_HIDE_MTRR			(1UL << 4U)  	/* Whether hide MTRR from VM */
-#define GUEST_FLAG_RT				(1UL << 5U)     /* Whether the vm is RT-VM */
-#define GUEST_FLAG_HIGHEST_SEVERITY		(1UL << 6U)     /* Whether has the highest severity */
+#define GUEST_FLAG_HIDE_MTRR			(1UL << 3U)  	/* Whether hide MTRR from VM */
+#define GUEST_FLAG_RT				(1UL << 4U)     /* Whether the vm is RT-VM */
 
 /* TODO: We may need to get this addr from guest ACPI instead of hardcode here */
 #define VIRTUAL_PM1A_CNT_ADDR		0x404U
@@ -362,13 +360,19 @@ struct acrn_create_vm {
 
 	uint64_t req_buf;
 
+	/**
+	 *   The least significant set bit is the PCPU # the VCPU 0 maps to;
+	 *   second set least significant bit is the PCPU # the VCPU 1 maps to;
+	 *   and so on...
+	*/
+	uint64_t cpu_affinity;
+
 	/** Reserved for future use*/
-	uint8_t  reserved2[16];
+	uint8_t  reserved2[8];
 } __aligned(8);
 
-
 /**
- * @brief Info to create a VCPU
+ * @brief Info to create a VCPU (deprecated)
  *
  * the parameter for HC_CREATE_VCPU hypercall
  */

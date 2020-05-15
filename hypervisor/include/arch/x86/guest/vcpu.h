@@ -13,40 +13,6 @@
 #ifndef VCPU_H
 #define VCPU_H
 
-/* Number of GPRs saved / restored for guest in VCPU structure */
-#define NUM_GPRS                            16U
-#define GUEST_STATE_AREA_SIZE               512
-
-#define	CPU_CONTEXT_OFFSET_RAX			0U
-#define	CPU_CONTEXT_OFFSET_RCX			8U
-#define	CPU_CONTEXT_OFFSET_RDX			16U
-#define	CPU_CONTEXT_OFFSET_RBX			24U
-#define	CPU_CONTEXT_OFFSET_RSP			32U
-#define	CPU_CONTEXT_OFFSET_RBP			40U
-#define	CPU_CONTEXT_OFFSET_RSI			48U
-#define	CPU_CONTEXT_OFFSET_RDI			56U
-#define	CPU_CONTEXT_OFFSET_R8			64U
-#define	CPU_CONTEXT_OFFSET_R9			72U
-#define	CPU_CONTEXT_OFFSET_R10			80U
-#define	CPU_CONTEXT_OFFSET_R11			88U
-#define	CPU_CONTEXT_OFFSET_R12			96U
-#define	CPU_CONTEXT_OFFSET_R13			104U
-#define	CPU_CONTEXT_OFFSET_R14			112U
-#define	CPU_CONTEXT_OFFSET_R15			120U
-#define	CPU_CONTEXT_OFFSET_CR0			128U
-#define	CPU_CONTEXT_OFFSET_CR2			136U
-#define	CPU_CONTEXT_OFFSET_CR4			144U
-#define	CPU_CONTEXT_OFFSET_RIP			152U
-#define	CPU_CONTEXT_OFFSET_RFLAGS		160U
-#define	CPU_CONTEXT_OFFSET_IA32_SPEC_CTRL	168U
-#define	CPU_CONTEXT_OFFSET_IA32_EFER		176U
-#define	CPU_CONTEXT_OFFSET_EXTCTX_START		184U
-#define	CPU_CONTEXT_OFFSET_CR3			184U
-#define	CPU_CONTEXT_OFFSET_IDTR			192U
-#define	CPU_CONTEXT_OFFSET_LDTR			216U
-
-/*sizes of various registers within the VCPU data structure */
-#define VMX_CPU_S_FXSAVE_GUEST_AREA_SIZE    GUEST_STATE_AREA_SIZE
 
 #ifndef ASSEMBLER
 
@@ -56,10 +22,12 @@
 #include <vlapic.h>
 #include <vmtrr.h>
 #include <schedule.h>
+#include <event.h>
 #include <io_req.h>
 #include <msr.h>
 #include <cpu.h>
 #include <instr_emul.h>
+#include <vmx.h>
 
 /**
  * @brief vcpu
@@ -121,6 +89,11 @@
 #define ACRN_REQUEST_VPID_FLUSH			7U
 
 /**
+ * @brief Request for initilizing VMCS
+ */
+#define ACRN_REQUEST_INIT_VMCS			8U
+
+/**
  * @}
  */
 /* End of virt_int_injection */
@@ -160,12 +133,11 @@
 		if (vcpu->state != VCPU_OFFLINE)
 
 enum vcpu_state {
+	VCPU_OFFLINE = 0U,
 	VCPU_INIT,
 	VCPU_RUNNING,
 	VCPU_PAUSED,
 	VCPU_ZOMBIE,
-	VCPU_OFFLINE,
-	VCPU_UNKNOWN_STATE,
 };
 
 enum vm_cpu_mode {
@@ -175,83 +147,11 @@ enum vm_cpu_mode {
 	CPU_MODE_64BIT,			/* IA-32E mode (CS.L = 1) */
 };
 
-struct segment_sel {
-	uint16_t selector;
-	uint64_t base;
-	uint32_t limit;
-	uint32_t attr;
-};
+#define	VCPU_EVENT_IOREQ		0
+#define	VCPU_EVENT_VIRTUAL_INTERRUPT	1
+#define	VCPU_EVENT_NUM			2
 
-/**
- * @brief registers info saved for vcpu running context
- */
-struct run_context {
-/* Contains the guest register set.
- * NOTE: This must be the first element in the structure, so that the offsets
- * in vmx_asm.S match
- */
-	union guest_cpu_regs_t {
-		struct acrn_gp_regs regs;
-		uint64_t longs[NUM_GPRS];
-	} guest_cpu_regs;
-
-	/** The guests CR registers 0, 2, 3 and 4. */
-	uint64_t cr0;
-
-	/* CPU_CONTEXT_OFFSET_CR2 =
-	*  offsetof(struct run_context, cr2) = 136
-	*/
-	uint64_t cr2;
-	uint64_t cr4;
-
-	uint64_t rip;
-	uint64_t rflags;
-
-	/* CPU_CONTEXT_OFFSET_IA32_SPEC_CTRL =
-	*  offsetof(struct run_context, ia32_spec_ctrl) = 168
-	*/
-	uint64_t ia32_spec_ctrl;
-	uint64_t ia32_efer;
-};
-
-/*
- * extended context does not save/restore during vm exit/entry, it's mainly
- * used in trusty world switch
- */
-struct ext_context {
-	uint64_t cr3;
-
-	/* segment registers */
-	struct segment_sel idtr;
-	struct segment_sel ldtr;
-	struct segment_sel gdtr;
-	struct segment_sel tr;
-	struct segment_sel cs;
-	struct segment_sel ss;
-	struct segment_sel ds;
-	struct segment_sel es;
-	struct segment_sel fs;
-	struct segment_sel gs;
-
-	uint64_t ia32_star;
-	uint64_t ia32_lstar;
-	uint64_t ia32_fmask;
-	uint64_t ia32_kernel_gs_base;
-
-	uint64_t ia32_pat;
-	uint32_t ia32_sysenter_cs;
-	uint64_t ia32_sysenter_esp;
-	uint64_t ia32_sysenter_eip;
-	uint64_t ia32_debugctl;
-
-	uint64_t dr7;
-	uint64_t tsc_offset;
-
-	/* The 512 bytes area to save the FPU/MMX/SSE states for the guest */
-	uint64_t
-	fxstore_guest_area[VMX_CPU_S_FXSAVE_GUEST_AREA_SIZE / sizeof(uint64_t)]
-	__aligned(16);
-};
+enum reset_mode;
 
 /* 2 worlds: 0 for Normal World, 1 for Secure World */
 #define NR_WORLD	2
@@ -259,12 +159,12 @@ struct ext_context {
 #define SECURE_WORLD	1
 
 #define NUM_WORLD_MSRS		2U
-#define NUM_COMMON_MSRS		15U
+#define NUM_COMMON_MSRS		16U
 #define NUM_GUEST_MSRS		(NUM_WORLD_MSRS + NUM_COMMON_MSRS)
 
 #define EOI_EXIT_BITMAP_SIZE	256U
 
-struct cpu_context {
+struct guest_cpu_context {
 	struct run_context run_ctx;
 	struct ext_context ext_ctx;
 
@@ -281,12 +181,14 @@ struct msr_store_entry {
 
 enum {
 	MSR_AREA_TSC_AUX = 0,
+	MSR_AREA_IA32_PQR_ASSOC,
 	MSR_AREA_COUNT,
 };
 
 struct msr_store_area {
 	struct msr_store_entry guest[MSR_AREA_COUNT];
 	struct msr_store_entry host[MSR_AREA_COUNT];
+	uint32_t count;	/* actual count of entries to be loaded/restored during VMEntry/VMExit */
 };
 
 struct acrn_vcpu_arch {
@@ -299,10 +201,13 @@ struct acrn_vcpu_arch {
 	/* per vcpu lapic */
 	struct acrn_vlapic vlapic;
 
+	/* pid MUST be 64 bytes aligned */
+	struct pi_desc pid __aligned(64);
+
 	struct acrn_vmtrr vmtrr;
 
 	int32_t cur_context;
-	struct cpu_context contexts[NR_WORLD];
+	struct guest_cpu_context contexts[NR_WORLD];
 
 	/* common MSRs, world_msrs[] is a subset of it */
 	uint64_t guest_msrs[NUM_GUEST_MSRS];
@@ -348,7 +253,6 @@ struct acrn_vcpu {
 
 	/* Architecture specific definitions for this VCPU */
 	struct acrn_vcpu_arch arch;
-	uint16_t pcpu_id;	/* Physical CPU ID of this VCPU */
 	uint16_t vcpu_id;	/* virtual identifier for VCPU */
 	struct acrn_vm *vm;		/* Reference to the VM this VCPU belongs to */
 
@@ -356,15 +260,17 @@ struct acrn_vcpu {
 	volatile enum vcpu_state prev_state;
 	volatile enum vcpu_state state;	/* State of this VCPU */
 
-	struct sched_object sched_obj;
+	struct thread_object thread_obj;
 	bool launched; /* Whether the vcpu is launched on target pcpu */
-	bool running; /* vcpu is picked up and run? */
+	volatile bool running; /* vcpu is picked up and run? */
 
 	struct instr_emul_ctxt inst_ctxt;
 	struct io_request req; /* used by io/ept emulation */
 
 	uint64_t reg_cached;
 	uint64_t reg_updated;
+
+	struct sched_event events[VCPU_EVENT_NUM];
 } __aligned(PAGE_SIZE);
 
 struct vcpu_dump {
@@ -373,9 +279,15 @@ struct vcpu_dump {
 	uint32_t str_max;
 };
 
+struct guest_mem_dump {
+	struct acrn_vcpu *vcpu;
+	uint64_t gva;
+	uint64_t len;
+};
+
 static inline bool is_vcpu_bsp(const struct acrn_vcpu *vcpu)
 {
-	return (vcpu->vcpu_id == BOOT_CPU_ID);
+	return (vcpu->vcpu_id == BSP_CPU_ID);
 }
 
 static inline enum vm_cpu_mode get_vcpu_mode(const struct acrn_vcpu *vcpu)
@@ -389,14 +301,28 @@ static inline void vcpu_retain_rip(struct acrn_vcpu *vcpu)
 	(vcpu)->arch.inst_len = 0U;
 }
 
-static inline struct acrn_vlapic *
-vcpu_vlapic(struct acrn_vcpu *vcpu)
+static inline struct acrn_vlapic *vcpu_vlapic(struct acrn_vcpu *vcpu)
 {
 	return &(vcpu->arch.vlapic);
 }
 
-void default_idle(__unused struct sched_object *obj);
-void vcpu_thread(struct sched_object *obj);
+/**
+ * @brief Get pointer to PI description.
+ *
+ * @param[in] vcpu Target vCPU
+ *
+ * @return pointer to PI description
+ *
+ * @pre vcpu != NULL
+ */
+static inline struct pi_desc *get_pi_desc(struct acrn_vcpu *vcpu)
+{
+	return &(vcpu->arch.pid);
+}
+
+uint16_t pcpuid_from_vcpu(const struct acrn_vcpu *vcpu);
+void default_idle(__unused struct thread_object *obj);
+void vcpu_thread(struct thread_object *obj);
 
 int32_t vmx_vmrun(struct run_context *context, int32_t ops, int32_t ibrs);
 
@@ -647,7 +573,11 @@ static inline bool is_pae(struct acrn_vcpu *vcpu)
 	return (vcpu_get_cr4(vcpu) & CR4_PAE) != 0UL;
 }
 
-struct acrn_vcpu* get_ever_run_vcpu(uint16_t pcpu_id);
+struct acrn_vcpu *get_running_vcpu(uint16_t pcpu_id);
+struct acrn_vcpu *get_ever_run_vcpu(uint16_t pcpu_id);
+
+void save_xsave_area(struct ext_context *ectx);
+void rstore_xsave_area(const struct ext_context *ectx);
 
 /**
  * @brief create a vcpu for the target vm
@@ -683,7 +613,7 @@ int32_t run_vcpu(struct acrn_vcpu *vcpu);
  *
  * @param[inout] vcpu pointer to vcpu data structure
  * @pre vcpu != NULL
- *
+ * @pre vcpu->state == VCPU_ZOMBIE
  * @return None
  */
 void offline_vcpu(struct acrn_vcpu *vcpu);
@@ -694,10 +624,12 @@ void offline_vcpu(struct acrn_vcpu *vcpu);
  * Reset all fields in a vCPU instance, the vCPU state is reset to VCPU_INIT.
  *
  * @param[inout] vcpu pointer to vcpu data structure
- *
+ * @param[in] mode the reset mode
+ * @pre vcpu != NULL
+ * @pre vcpu->state == VCPU_ZOMBIE
  * @return None
  */
-void reset_vcpu(struct acrn_vcpu *vcpu);
+void reset_vcpu(struct acrn_vcpu *vcpu, enum reset_mode mode);
 
 /**
  * @brief pause the vcpu and set new state
@@ -718,9 +650,9 @@ void pause_vcpu(struct acrn_vcpu *vcpu, enum vcpu_state new_state);
  *
  * @param[inout] vcpu pointer to vcpu data structure
  *
- * @return None
+ * @return 0 on success, -1 on failure.
  */
-void resume_vcpu(struct acrn_vcpu *vcpu);
+int32_t resume_vcpu(struct acrn_vcpu *vcpu);
 
 /**
  * @brief set the vcpu to running state, then it will be scheculed.
@@ -728,10 +660,22 @@ void resume_vcpu(struct acrn_vcpu *vcpu);
  * Adds a vCPU into the run queue and make a reschedule request for it. It sets the vCPU state to VCPU_RUNNING.
  *
  * @param[inout] vcpu pointer to vcpu data structure
+ * @pre vcpu != NULL
+ * @pre vcpu->state == VCPU_INIT
+ * @return None
+ */
+void launch_vcpu(struct acrn_vcpu *vcpu);
+
+/**
+ * @brief kick the vcpu and let it handle pending events
+ *
+ * Kick a vCPU to handle the pending events.
+ *
+ * @param[in] vcpu pointer to vcpu data structure
  *
  * @return None
  */
-void schedule_vcpu(struct acrn_vcpu *vcpu);
+void kick_vcpu(const struct acrn_vcpu *vcpu);
 
 /**
  * @brief create a vcpu for the vm and mapped to the pcpu.
@@ -758,6 +702,30 @@ int32_t prepare_vcpu(struct acrn_vm *vm, uint16_t pcpu_id);
  */
 uint64_t vcpumask2pcpumask(struct acrn_vm *vm, uint64_t vdmask);
 bool is_lapic_pt_enabled(struct acrn_vcpu *vcpu);
+
+/**
+ * @brief handle posted interrupts
+ *
+ * VT-d PI handler, find the corresponding vCPU for this IRQ,
+ * if the associated PID's bit ON is set, wake it up.
+ *
+ * @param[in] vcpu_index a zero based index of where the vCPU is located in the vCPU list for current pCPU
+ * @pre vcpu_index < CONFIG_MAX_VM_NUM
+ *
+ * @return None
+ */
+void vcpu_handle_pi_notification(uint32_t vcpu_index);
+
+/*
+ * @brief Update the state of vCPU and state of vlapic
+ *
+ * The vlapic state of VM shall be updated for some vCPU
+ * state update cases, such as from VCPU_INIT to VCPU_RUNNING.
+
+ * @pre (vcpu != NULL)
+ */
+void vcpu_set_state(struct acrn_vcpu *vcpu, enum vcpu_state new_state);
+
 /**
  * @}
  */

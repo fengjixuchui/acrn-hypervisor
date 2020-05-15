@@ -113,12 +113,14 @@
 #define CPUID_TLB               2U
 #define CPUID_SERIALNUM         3U
 #define CPUID_EXTEND_FEATURE    7U
-#define CPUID_RSD_ALLOCATION   0x10U
+#define CPUID_XSAVE_FEATURES   0xDU
+#define CPUID_RDT_ALLOCATION   0x10U
 #define CPUID_MAX_EXTENDED_FUNCTION  0x80000000U
 #define CPUID_EXTEND_FUNCTION_1      0x80000001U
 #define CPUID_EXTEND_FUNCTION_2      0x80000002U
 #define CPUID_EXTEND_FUNCTION_3      0x80000003U
 #define CPUID_EXTEND_FUNCTION_4      0x80000004U
+#define CPUID_EXTEND_INVA_TSC        0x80000007U
 #define CPUID_EXTEND_ADDRESS_SIZE    0x80000008U
 
 
@@ -130,16 +132,6 @@ static inline void asm_cpuid(uint32_t *eax, uint32_t *ebx,
 			"=c"(*ecx), "=d"(*edx)
 			: "0" (*eax), "2" (*ecx)
 			: "memory");
-}
-
-static inline void cpuid(uint32_t leaf,
-			uint32_t *eax, uint32_t *ebx,
-			uint32_t *ecx, uint32_t *edx)
-{
-	*eax = leaf;
-	*ecx = 0U;
-
-	asm_cpuid(eax, ebx, ecx, edx);
 }
 
 static inline void cpuid_subleaf(uint32_t leaf, uint32_t subleaf,

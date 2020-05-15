@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2019 Intel Corporation.
+# SPDX-License-Identifier: BSD-3-Clause
 
 offline_path="/sys/class/vhm/acrn_vhm"
 
@@ -92,17 +94,23 @@ fi
 #logger_setting, format: logger_name,level; like following
 logger_setting="--logger_setting console,level=4;kmsg,level=3;disk,level=5"
 
+#for pm by vuart setting
+pm_channel="--pm_notify_channel uart "
+pm_by_vuart="--pm_by_vuart pty,/run/acrn/life_mngr_"$vm_name
+pm_vuart_node=" -s 1:0,lpc -l com2,/run/acrn/life_mngr_"$vm_name
+
 #for memsize setting
 mem_size=2048M
 
-acrn-dm -A -m $mem_size -c $2 -s 0:0,hostbridge \
-  -s 2,pci-gvt -G "$3" \
+acrn-dm -A -m $mem_size -s 0:0,hostbridge \
+  -s 2,pci-gvt -G "$2" \
   -s 5,virtio-console,@stdio:stdio_port \
   -s 6,virtio-hyper_dmabuf \
   -s 3,virtio-blk,/home/clear/uos/uos.img \
   -s 4,virtio-net,tap0 \
   -s 7,virtio-rnd \
-  --ovmf ./OVMF.fd \
+  --ovmf /usr/share/acrn/bios/OVMF.fd \
+  $pm_channel $pm_by_vuart $pm_vuart_node \
   $logger_setting \
   --mac_seed $mac_seed \
   $vm_name
@@ -140,5 +148,5 @@ if [ "$1" = "-C" ];then
 	echo "runc_container"
 	run_container
 else
-	launch_clear 1 1 "64 448 8" 0x070F00
+	launch_clear 1 "64 448 8" 0x070F00
 fi

@@ -1,11 +1,14 @@
 .. _introduction:
 
-Introduction to Project ACRN
-############################
+What is ACRN
+############
 
-ACRN™ is a, flexible, lightweight reference hypervisor, built with
-real-time and safety-criticality in mind, optimized to streamline
-embedded development through an open source platform.  ACRN defines a
+Introduction to Project ACRN
+****************************
+
+ACRN |trade| is a, flexible, lightweight reference hypervisor, built with
+real-time and safety-criticality in mind, and optimized to streamline
+embedded development through an open source platform. ACRN defines a
 device hypervisor reference stack and an architecture for running
 multiple software subsystems, managed securely, on a consolidated system
 by means of a virtual machine manager (VMM). It also defines a reference
@@ -19,6 +22,13 @@ that currently exists between datacenter hypervisors, and hard
 partitioning hypervisors. The ACRN hypervisor architecture partitions
 the system into different functional domains, with carefully selected
 user VM sharing optimizations for IoT and embedded devices.
+
+ACRN Open Source Roadmap 2020
+*****************************
+
+Stay informed on what's ahead for ACRN in 2020 by visiting the `ACRN 2020 Roadmap <https://projectacrn.org/wp-content/uploads/sites/59/2020/03/ACRN-Roadmap-External-2020.pdf>`_.
+
+For up-to-date happenings, visit the `ACRN blog <https://projectacrn.org/blog/>`_.
 
 ACRN High-Level Architecture
 ****************************
@@ -49,7 +59,7 @@ actions when system critical failures occur.
 
 Shown on the right of :numref:`V2-hl-arch`, the remaining hardware
 resources are shared among the service VM and user VMs.  The service VM
-is similar to Xen’s Dom0, and a user VM is similar to Xen’s DomU. The
+is similar to Xen's Dom0, and a user VM is similar to Xen's DomU. The
 service VM is the first VM launched by ACRN, if there is no pre-launched
 VM. The service VM can access hardware resources directly by running
 native drivers and it provides device sharing services to the user VMs
@@ -107,7 +117,7 @@ information about the vehicle, such as:
   fuel or tire pressure;
 - showing rear-view and surround-view cameras for parking assistance.
 
-An **In-Vehicle Infotainment (IVI)** system’s capabilities can include:
+An **In-Vehicle Infotainment (IVI)** system's capabilities can include:
 
 - navigation systems, radios, and other entertainment systems;
 - connection to mobile devices for phone calls, music, and applications
@@ -187,7 +197,7 @@ real-time OS needs, such as VxWorks* or RT-Linux*.
 
    ACRN Industrial Usage Architecture Overview
 
-:numref:`V2-industry-usage-arch` shows ACRN’s block diagram for an
+:numref:`V2-industry-usage-arch` shows ACRN's block diagram for an
 Industrial usage scenario:
 
 - ACRN boots from the SoC platform, and supports firmware such as the
@@ -378,6 +388,9 @@ and many other features.
 Boot Sequence
 *************
 
+.. _systemd-boot: https://www.freedesktop.org/software/systemd/man/systemd-boot.html
+.. _grub: https://www.gnu.org/software/grub/manual/grub/
+
 ACRN supports two kinds of boots: **De-privilege boot mode** and **Direct
 boot mode**.
 
@@ -385,9 +398,9 @@ De-privilege boot mode
 ======================
 
 **De-privilege boot mode** is loaded by ``acrn.efi`` under a UEFI
-environment. The Service VM must be the first launched VM,  (i.e. VM0).
+environment. The Service VM must be the first launched VM, (i.e. VM0).
 
-In :numref:`boot-flow` we show a verified Boot Sequence with UEFI
+In :numref:`boot-flow`, we show a verified Boot Sequence with UEFI
 on an Intel Architecture platform NUC (see :ref:`hardware`).
 
 .. graphviz:: images/boot-flow.dot
@@ -397,21 +410,43 @@ on an Intel Architecture platform NUC (see :ref:`hardware`).
 
 The Boot process proceeds as follows:
 
-#. UEFI verifies and boots the ACRN hypervisor and Service VM Bootloader
-#. UEFI (or Service VM Bootloader) verifies and boots Service VM kernel
-#. Service VM kernel verifies and loads ACRN Device Model and Virtual
-   bootloader through dm-verity
-#. Virtual bootloader starts the User-side verified boot process
+#. UEFI verifies and boots the ACRN hypervisor and Service VM Bootloader.
+#. UEFI (or Service VM Bootloader) verifies and boots the Service VM kernel.
+#. The Service VM kernel verifies and loads the ACRN Device Model and the Virtual
+   bootloader through ``dm-verity``.
+#. The virtual bootloader starts the User-side verified boot process.
 
 .. note::
-   To avoid hardware resources conflict with ACRN hypervisor, UEFI
-   services shall not use IOMMU. In addition, currently we only support
-   UEFI timer with HPET MSI.
+   To avoid a hardware resources conflict with the ACRN hypervisor, UEFI
+   services shall not use IOMMU. In addition, we only currently support the
+   UEFI timer with the HPET MSI.
+
+In this boot mode, both the Service and User VM boot options (e.g. Linux
+command-line parameters) are configured following the instructions for the EFI
+bootloader used by the Operating System (OS).
+
+* In the case of Clear Linux, the EFI bootloader is `systemd-boot`_ and the Linux
+  kernel command-line parameters are defined in the ``.conf`` files.
+* Another popular EFI bootloader used by Linux distributions is `grub`_.
+  Distributions like Ubuntu/Debian, Fedora/CentOS use `grub`_.
+
+.. note::
+
+   The `Slim Bootloader <https://www.intel.com/content/www/us/en/design/products-and-solutions/technologies/slim-bootloader/overview.html>`_
+   is an alternative boot firmware that can be used to boot ACRN. The `Boot ACRN Hyervisor <https://slimbootloader.github.io/how-tos/boot-acrn.html>`_
+   tutorial provides more information on how to use SBL with ACRN.
+
+.. note::
+
+   A virtual `Slim Bootloader <https://www.intel.com/content/www/us/en/design/products-and-solutions/technologies/slim-bootloader/overview.html>`_, called ``vSBL``,
+   can also be used to start User VMs. The :ref:`acrn-dm_parameters` provides more information
+   on how to boot a User VM using ``vSBL``. Note that in this case, the kernel command-line parameters are
+   defined by the combination of the ``cmdline.txt`` passed on to the ``iasimage`` script and in the launch script, via the ``-B`` option.
 
 Direct boot mode
 ================
 
-In :numref:`boot-flow-2` we show the **Direct boot mode** sequence:
+In :numref:`boot-flow-2`, we show the **Direct boot mode** sequence:
 
 .. graphviz:: images/boot-flow-2.dot
   :name: boot-flow-2
@@ -420,14 +455,17 @@ In :numref:`boot-flow-2` we show the **Direct boot mode** sequence:
 
 The Boot process proceeds as follows:
 
-#. UEFI boots GRUB
+#. UEFI boots GRUB.
 #. GRUB boots the ACRN hypervisor and loads the VM kernels as Multi-boot
-   modules
-#. ACRN hypervisor verifies and boots kernels of the Pre-launched VM and
-   Service VM
+   modules.
+#. The ACRN hypervisor verifies and boots kernels of the Pre-launched VM and
+   Service VM.
 #. In the Service VM launch path, the Service VM kernel verifies and loads
-   the ACRN Device Model and Virtual bootloader through dm-verity
-#. Virtual bootloader starts the User-side verified boot process
+   the ACRN Device Model and Virtual bootloader through ``dm-verity``.
+#. The virtual bootloader starts the User-side verified boot process.
+
+In this boot mode, the boot options are defined via the ``VM{x}_CONFIG_OS_BOOTARGS``
+macro in the source code (replace ``{x}`` with the VM number).
 
 ACRN Hypervisor Architecture
 ****************************
@@ -578,10 +616,10 @@ ACRN Device model incorporates these three aspects:
   from the User VM device, the I/O dispatcher sends this request to the
   corresponding device emulation routine.
 
-**I/O Path**: 
+**I/O Path**:
   see `ACRN-io-mediator`_ below
 
-**VHM**: 
+**VHM**:
   The Virtio and Hypervisor Service Module is a kernel module in the
   Service VM acting as a middle layer to support the device model. The VHM
   and its client handling flow is described below:
@@ -709,7 +747,7 @@ Following along with the numbered items in :numref:`io-emulation-path`:
    the module is invoked to execute its processing APIs.
 6. After the ACRN device module completes the emulation (port IO 20h access
    in this example), (say uDev1 here), uDev1 puts the result into the
-   shared page (in register AL in this example). 
+   shared page (in register AL in this example).
 7. ACRN device model then returns control to ACRN hypervisor to indicate the
    completion of an IO instruction emulation, typically thru VHM/hypercall.
 8. The ACRN hypervisor then knows IO emulation is complete, and copies

@@ -8,19 +8,22 @@
 #include <logmsg.h>
 #include <io.h>
 #include <spinlock.h>
+#include <cpu_caps.h>
 #include "pci.h"
 #include "vtd.h"
 #include "acpi.h"
 
 
 struct find_iter_args {
-	int32_t i;
+	uint32_t i;
 	struct acpi_dmar_hardware_unit *res;
 };
 
 typedef int32_t (*dmar_iter_t)(struct acpi_dmar_header*, void*);
 
-static int32_t dmar_unit_cnt;
+static uint32_t dmar_unit_cnt;
+static struct dmar_drhd drhd_info_array[MAX_DRHDS];
+static struct dmar_dev_scope drhd_dev_scope[MAX_DRHDS][MAX_DRHD_DEVSCOPES];
 
 static void *get_dmar_table(void)
 {
@@ -67,21 +70,24 @@ static int32_t
 drhd_find_iter(struct acpi_dmar_header *dmar_header, void *arg)
 {
 	struct find_iter_args *args;
+	int32_t ret = 1;
 
-	if (dmar_header->type != ACPI_DMAR_TYPE_HARDWARE_UNIT)
-		return 1;
-
-	args = arg;
-	if (args->i == 0) {
-		args->res = (struct acpi_dmar_hardware_unit *)dmar_header;
-		return 0;
+	if (dmar_header->type == ACPI_DMAR_TYPE_HARDWARE_UNIT){
+		args = arg;
+		if (args->i == 0U) {
+			args->res = (struct acpi_dmar_hardware_unit *)dmar_header;
+			ret = 0;
+		}
+		else{
+			args->i--;
+			ret = 1;
+		}
 	}
-	args->i--;
-	return 1;
+	return ret;
 }
 
 static struct acpi_dmar_hardware_unit *
-drhd_find_by_index(int32_t idx)
+drhd_find_by_index(uint32_t idx)
 {
 	struct find_iter_args args;
 
@@ -103,27 +109,23 @@ static uint8_t get_secondary_bus(uint8_t bus, uint8_t dev, uint8_t func)
 	return (data >> 8U) & 0xffU;
 }
 
-static uint16_t
+static union pci_bdf
 dmar_path_bdf(int32_t path_len, int32_t busno,
 	const struct acpi_dmar_pci_path *path)
 {
 	int32_t i;
-	uint8_t bus;
-	uint8_t dev;
-	uint8_t fun;
+	union pci_bdf dmar_bdf;
 
-
-	bus = (uint8_t)busno;
-	dev = path->device;
-	fun = path->function;
-
+	dmar_bdf.bits.b = (uint8_t)busno;
+	dmar_bdf.bits.d = path->device;
+	dmar_bdf.bits.f = path->function;
 
 	for (i = 1; i < path_len; i++) {
-		bus = get_secondary_bus(bus, dev, fun);
-		dev = path[i].device;
-		fun = path[i].function;
+		dmar_bdf.bits.b = get_secondary_bus(dmar_bdf.bits.b, dmar_bdf.bits.d, dmar_bdf.bits.f);
+		dmar_bdf.bits.d = path[i].device;
+		dmar_bdf.bits.f = path[i].function;
 	}
-	return (bus << 8U | DEVFUN(dev, fun));
+	return dmar_bdf;
 }
 
 
@@ -132,7 +134,7 @@ handle_dmar_devscope(struct dmar_dev_scope *dev_scope,
 	void *addr, int32_t remaining)
 {
 	int32_t path_len;
-	uint16_t bdf;
+	union pci_bdf dmar_bdf;
 	struct acpi_dmar_pci_path *path;
 	struct acpi_dmar_device_scope *apci_devscope = addr;
 
@@ -147,11 +149,11 @@ handle_dmar_devscope(struct dmar_dev_scope *dev_scope,
 			sizeof(struct acpi_dmar_device_scope)) /
 			sizeof(struct acpi_dmar_pci_path);
 
-	bdf = dmar_path_bdf(path_len, apci_devscope->bus, path);
+	dmar_bdf = dmar_path_bdf(path_len, apci_devscope->bus, path);
 	dev_scope->id = apci_devscope->enumeration_id;
 	dev_scope->type = apci_devscope->entry_type;
-	dev_scope->bus = (bdf >> 8U) & 0xffU;
-	dev_scope->devfun = bdf & 0xffU;
+	dev_scope->bus = dmar_bdf.fields.bus;
+	dev_scope->devfun = dmar_bdf.fields.devfun;
 
 	return apci_devscope->length;
 }
@@ -177,6 +179,10 @@ get_drhd_dev_scope_cnt(struct acpi_dmar_hardware_unit *drhd)
 	return count;
 }
 
+/**
+ * @Application constraint: The dedicated DMAR unit for Intel integrated GPU
+ * shall be available on the physical platform.
+ */ 
 static int32_t
 handle_one_drhd(struct acpi_dmar_hardware_unit *acpi_drhd,
 		struct dmar_drhd *drhd)
@@ -206,11 +212,13 @@ handle_one_drhd(struct acpi_dmar_hardware_unit *acpi_drhd,
 
 		consumed = handle_dmar_devscope(dev_scope, cp, remaining);
 
-		if (((drhd->segment << 16U) |
-		     (dev_scope->bus << 8U) |
-		     dev_scope->devfun) == CONFIG_GPU_SBDF) {
-			ASSERT(dev_count == 1, "no dedicated iommu for gpu");
-			drhd->ignore = true;
+		/* Disable GPU IOMMU due to gvt-d hasn’t been enabled on APL yet. */
+		if (is_apl_platform()) {
+			if (((drhd->segment << 16U) |
+		     	     (dev_scope->bus << 8U) |
+		     	     dev_scope->devfun) == CONFIG_GPU_SBDF) {
+				drhd->ignore = true;
+			}
 		}
 
 		if (consumed <= 0)
@@ -233,7 +241,7 @@ handle_one_drhd(struct acpi_dmar_hardware_unit *acpi_drhd,
 
 int32_t parse_dmar_table(struct dmar_info *plat_dmar_info)
 {
-	int32_t i;
+	uint32_t i;
 	struct acpi_dmar_hardware_unit *acpi_drhd;
 
 	/* find out how many dmar units */
@@ -241,14 +249,16 @@ int32_t parse_dmar_table(struct dmar_info *plat_dmar_info)
 	ASSERT(dmar_unit_cnt <= MAX_DRHDS, "parsed dmar_unit_cnt > MAX_DRHDS");
 
 	plat_dmar_info->drhd_count = dmar_unit_cnt;
+	plat_dmar_info->drhd_units = drhd_info_array;
 
-	for (i = 0; i < dmar_unit_cnt; i++) {
+	for (i = 0U; i < dmar_unit_cnt; i++) {
 		acpi_drhd = drhd_find_by_index(i);
 		if (acpi_drhd == NULL)
 			continue;
 		if (acpi_drhd->flags & DRHD_FLAG_INCLUDE_PCI_ALL_MASK)
-			ASSERT((i+1) == dmar_unit_cnt,
+			ASSERT((i + 1U) == dmar_unit_cnt,
 				"drhd with flags set should be the last one");
+		plat_dmar_info->drhd_units[i].devices = drhd_dev_scope[i];
 		handle_one_drhd(acpi_drhd, &(plat_dmar_info->drhd_units[i]));
 	}
 

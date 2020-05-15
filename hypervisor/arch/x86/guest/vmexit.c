@@ -30,7 +30,8 @@ static int32_t unhandled_vmexit_handler(struct acrn_vcpu *vcpu);
 static int32_t xsetbv_vmexit_handler(struct acrn_vcpu *vcpu);
 static int32_t wbinvd_vmexit_handler(struct acrn_vcpu *vcpu);
 static int32_t undefined_vmexit_handler(struct acrn_vcpu *vcpu);
-static int32_t init_signal_vmexit_handler(__unused struct acrn_vcpu *vcpu);
+static int32_t pause_vmexit_handler(__unused struct acrn_vcpu *vcpu);
+static int32_t hlt_vmexit_handler(struct acrn_vcpu *vcpu);
 
 /* VM Dispatch table for Exit condition handling */
 static const struct vm_exit_dispatch dispatch_table[NR_VMX_EXIT_REASONS] = {
@@ -41,7 +42,7 @@ static const struct vm_exit_dispatch dispatch_table[NR_VMX_EXIT_REASONS] = {
 	[VMX_EXIT_REASON_TRIPLE_FAULT] = {
 		.handler = triple_fault_vmexit_handler},
 	[VMX_EXIT_REASON_INIT_SIGNAL] = {
-		.handler = init_signal_vmexit_handler},
+		.handler = undefined_vmexit_handler},
 	[VMX_EXIT_REASON_STARTUP_IPI] = {
 		.handler = unhandled_vmexit_handler},
 	[VMX_EXIT_REASON_IO_SMI] = {
@@ -51,7 +52,7 @@ static const struct vm_exit_dispatch dispatch_table[NR_VMX_EXIT_REASONS] = {
 	[VMX_EXIT_REASON_INTERRUPT_WINDOW] = {
 		.handler = interrupt_window_vmexit_handler},
 	[VMX_EXIT_REASON_NMI_WINDOW] = {
-		.handler = unhandled_vmexit_handler},
+		.handler = nmi_window_vmexit_handler},
 	[VMX_EXIT_REASON_TASK_SWITCH] = {
 		.handler = unhandled_vmexit_handler},
 	[VMX_EXIT_REASON_CPUID] = {
@@ -59,7 +60,7 @@ static const struct vm_exit_dispatch dispatch_table[NR_VMX_EXIT_REASONS] = {
 	[VMX_EXIT_REASON_GETSEC] = {
 		.handler = unhandled_vmexit_handler},
 	[VMX_EXIT_REASON_HLT] = {
-		.handler = unhandled_vmexit_handler},
+		.handler = hlt_vmexit_handler},
 	[VMX_EXIT_REASON_INVD] = {
 		.handler = unhandled_vmexit_handler},
 	[VMX_EXIT_REASON_INVLPG] = {
@@ -114,7 +115,7 @@ static const struct vm_exit_dispatch dispatch_table[NR_VMX_EXIT_REASONS] = {
 	[VMX_EXIT_REASON_MONITOR] = {
 		.handler = unhandled_vmexit_handler},
 	[VMX_EXIT_REASON_PAUSE] = {
-		.handler = unhandled_vmexit_handler},
+		.handler = pause_vmexit_handler},
 	[VMX_EXIT_REASON_ENTRY_FAILURE_MACHINE_CHECK] = {
 		.handler = unhandled_vmexit_handler},
 	[VMX_EXIT_REASON_TPR_BELOW_THRESHOLD] = {
@@ -174,7 +175,7 @@ int32_t vmexit_handler(struct acrn_vcpu *vcpu)
 	uint16_t basic_exit_reason;
 	int32_t ret;
 
-	if (get_pcpu_id() != vcpu->pcpu_id) {
+	if (get_pcpu_id() != pcpuid_from_vcpu(vcpu)) {
 		pr_fatal("vcpu is not running on its pcpu!");
 		ret = -EINVAL;
 	} else {
@@ -194,8 +195,20 @@ int32_t vmexit_handler(struct acrn_vcpu *vcpu)
 				(void)vcpu_queue_exception(vcpu, vector, err_code);
 				vcpu->arch.idt_vectoring_info = 0U;
 			} else if (type == VMX_INT_TYPE_NMI) {
-				vcpu_make_request(vcpu, ACRN_REQUEST_NMI);
-				vcpu->arch.idt_vectoring_info = 0U;
+				if (is_notification_nmi(vcpu->vm)) {
+					/*
+					 * Currently, ACRN doesn't support vNMI well and there is no well-designed
+					 * way to check if the NMI is for notification or not. Here we take all the
+					 * NMIs as notification NMI for lapic-pt VMs temporarily.
+					 *
+					 * TODO: Add a way in is_notification_nmi to check the NMI is for notification
+					 *       or not in order to support vNMI.
+					 */
+					pr_dbg("This NMI is used as notification signal. So ignore it.");
+				} else {
+					vcpu_make_request(vcpu, ACRN_REQUEST_NMI);
+					vcpu->arch.idt_vectoring_info = 0U;
+				}
 			} else {
 				/* No action on EXT_INT or SW exception. */
 			}
@@ -205,11 +218,11 @@ int32_t vmexit_handler(struct acrn_vcpu *vcpu)
 		basic_exit_reason = (uint16_t)(vcpu->arch.exit_reason & 0xFFFFU);
 
 		/* Log details for exit */
-		pr_dbg("Exit Reason: 0x%016llx ", vcpu->arch.exit_reason);
+		pr_dbg("Exit Reason: 0x%016lx ", vcpu->arch.exit_reason);
 
 		/* Ensure exit reason is within dispatch table */
 		if (basic_exit_reason >= ARRAY_SIZE(dispatch_table)) {
-			pr_err("Invalid Exit Reason: 0x%016llx ", vcpu->arch.exit_reason);
+			pr_err("Invalid Exit Reason: 0x%016lx ", vcpu->arch.exit_reason);
 			ret = -EINVAL;
 		} else {
 			/* Calculate dispatch table entry */
@@ -244,12 +257,12 @@ int32_t vmexit_handler(struct acrn_vcpu *vcpu)
 
 static int32_t unhandled_vmexit_handler(struct acrn_vcpu *vcpu)
 {
-	pr_fatal("Error: Unhandled VM exit condition from guest at 0x%016llx ",
+	pr_fatal("Error: Unhandled VM exit condition from guest at 0x%016lx ",
 			exec_vmread(VMX_GUEST_RIP));
 
-	pr_fatal("Exit Reason: 0x%016llx ", vcpu->arch.exit_reason);
+	pr_fatal("Exit Reason: 0x%016lx ", vcpu->arch.exit_reason);
 
-	pr_err("Exit qualification: 0x%016llx ",
+	pr_err("Exit qualification: 0x%016lx ",
 			exec_vmread(VMX_EXIT_QUALIFICATION));
 
 	TRACE_2L(TRACE_VMEXIT_UNHANDLED, vcpu->arch.exit_reason, 0UL);
@@ -259,10 +272,24 @@ static int32_t unhandled_vmexit_handler(struct acrn_vcpu *vcpu)
 
 static int32_t triple_fault_vmexit_handler(struct acrn_vcpu *vcpu)
 {
-	pr_fatal("VM%d: triple fault @ guest RIP 0x%016llx, exit qualification: 0x%016llx",
+	pr_fatal("VM%d: triple fault @ guest RIP 0x%016lx, exit qualification: 0x%016lx",
 		vcpu->vm->vm_id, exec_vmread(VMX_GUEST_RIP), exec_vmread(VMX_EXIT_QUALIFICATION));
 	triple_fault_shutdown_vm(vcpu);
 
+	return 0;
+}
+
+static int32_t pause_vmexit_handler(__unused struct acrn_vcpu *vcpu)
+{
+	yield_current();
+	return 0;
+}
+
+static int32_t hlt_vmexit_handler(struct acrn_vcpu *vcpu)
+{
+	if ((vcpu->arch.pending_req == 0UL) && (!vlapic_has_pending_intr(vcpu))) {
+		wait_event(&vcpu->events[VCPU_EVENT_VIRTUAL_INTERRUPT]);
+	}
 	return 0;
 }
 
@@ -274,14 +301,13 @@ int32_t cpuid_vmexit_handler(struct acrn_vcpu *vcpu)
 	rbx = vcpu_get_gpreg(vcpu, CPU_REG_RBX);
 	rcx = vcpu_get_gpreg(vcpu, CPU_REG_RCX);
 	rdx = vcpu_get_gpreg(vcpu, CPU_REG_RDX);
+	TRACE_2L(TRACE_VMEXIT_CPUID, rax, rcx);
 	guest_cpuid(vcpu, (uint32_t *)&rax, (uint32_t *)&rbx,
 		(uint32_t *)&rcx, (uint32_t *)&rdx);
 	vcpu_set_gpreg(vcpu, CPU_REG_RAX, rax);
 	vcpu_set_gpreg(vcpu, CPU_REG_RBX, rbx);
 	vcpu_set_gpreg(vcpu, CPU_REG_RCX, rcx);
 	vcpu_set_gpreg(vcpu, CPU_REG_RDX, rdx);
-
-	TRACE_2L(TRACE_VMEXIT_CPUID, (uint64_t)vcpu->vcpu_id, 0UL);
 
 	return 0;
 }
@@ -371,23 +397,5 @@ static int32_t wbinvd_vmexit_handler(struct acrn_vcpu *vcpu)
 static int32_t undefined_vmexit_handler(struct acrn_vcpu *vcpu)
 {
 	vcpu_inject_ud(vcpu);
-	return 0;
-}
-
-/*
- * This handler is only triggered by INIT signal when poweroff from inside of RTVM
- */
-static int32_t init_signal_vmexit_handler(__unused struct acrn_vcpu *vcpu)
-{
-	/*
-	 * Intel SDM Volume 3, 25.2:
-	 *   INIT signals. INIT signals cause VM exits. A logical processer performs none
-	 *   of the operations normally associated with these events. Such exits do not modify
-	 *   register state or clear pending events as they would outside of VMX operation (If
-	 *   a logical processor is the wait-for-SIPI state, INIT signals are blocked. They do
-	 *   not cause VM exits in this case).
-	 *
-	 * So, it is safe to ignore the signal and reture here.
-	 */
 	return 0;
 }

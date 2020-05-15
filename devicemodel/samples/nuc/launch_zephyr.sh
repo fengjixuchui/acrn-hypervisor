@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (C) 2019 Intel Corporation.
+# SPDX-License-Identifier: BSD-3-Clause
 
 function launch_zephyr()
 {
@@ -15,10 +17,10 @@ fi
 #for memsize setting
 mem_size=128M
 
-acrn-dm -A -m $mem_size -c $2 -s 0:0,hostbridge -s 1:0,lpc -l com1,stdio \
+acrn-dm -A -m $mem_size -s 0:0,hostbridge -s 1:0,lpc -l com1,stdio \
   -s 5,virtio-console,@pty:pty_port \
   -s 3,virtio-blk,./zephyr.img \
-  --ovmf ./OVMF.fd \
+  --ovmf /usr/share/acrn/bios/OVMF.fd \
   $vm_name
 }
 
@@ -39,4 +41,4 @@ for i in `ls -d /sys/devices/system/cpu/cpu[1-99]`; do
         fi
 done
 
-launch_zephyr 1 1
+launch_zephyr 1
