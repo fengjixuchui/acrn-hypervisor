@@ -37,6 +37,7 @@ PT_SUB_PCI['ethernet'] = ['Ethernet controller', 'Network controller', '802.1a c
                         '802.1b controller', 'Wireless controller']
 PT_SUB_PCI['sata'] = ['SATA controller']
 PT_SUB_PCI['nvme'] = ['Non-Volatile memory controller']
+PT_SUB_PCI['usb'] = ['USB controller']
 UUID_DB = {
     'SOS_VM':['dbbbd434-7a57-4216-a12c-2201f1ab0240'],
     'SAFETY_VM':['fc836901-8685-4bc0-8b71-6e31dc36fa47'],
@@ -380,19 +381,6 @@ def os_kern_args_check(id_kern_args_dic, prime_item, item):
             ERR_LIST[key] = "VM os config kernel service os should be SOS_VM_BOOTARGS"
 
 
-def os_kern_console_check(tty_console, prime_item, item):
-    """
-    Check os kernel console
-    :param prime_item: the prime item in xml file
-    :param item: vm os config console item in xml
-    :return: None
-    """
-
-    if tty_console and "ttyS" not in tty_console:
-        key = "hv:{},{}".format(prime_item, item)
-        ERR_LIST[key] = "VM os config kernel console should be ttyS[0..3]"
-
-
 def os_kern_load_addr_check(id_kern_load_addr_dic, prime_item, item):
     """
     Check os kernel load address
@@ -431,20 +419,6 @@ def os_kern_entry_addr_check(id_kern_entry_addr_dic, prime_item, item):
         if '0x' not in kern_entry_addr and '0X' not in kern_entry_addr:
             key = "vm:id={},{},{}".format(id_key, prime_item, item)
             ERR_LIST[key] = "VM os config kernel entry address should Hex format"
-
-
-def os_kern_root_dev_check(id_kern_rootdev_dic, prime_item, item):
-    """
-    Check os kernel rootfs partitions
-    :param prime_item: the prime item in xml file
-    :param item: vm os config rootdev item in xml
-    :return: None
-    """
-
-    for id_key, kern_rootdev in id_kern_rootdev_dic.items():
-        if not kern_rootdev:
-            key = "vm:id={},{},{}".format(id_key, prime_item, item)
-            ERR_LIST[key] = "VM os config kernel root device should not empty"
 
 
 def pci_devs_check(pci_bdf_devs, branch_tag, tag_str):
@@ -574,6 +548,9 @@ def avl_pci_devs():
     pci_dev_list.extend(tmp_pci_list)
     tmp_pci_list = common.get_avl_dev_info(bdf_desc_map, PT_SUB_PCI['nvme'])
     pci_dev_list.extend(tmp_pci_list)
+    tmp_pci_list = common.get_avl_dev_info(bdf_desc_map, PT_SUB_PCI['usb'])
+    pci_dev_list.extend(tmp_pci_list)
+    pci_dev_list.insert(0, '')
 
     return pci_dev_list
 

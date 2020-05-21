@@ -54,9 +54,6 @@ def get_scenario_item_values(board_info, scenario_info):
     # pre board_private
     (scenario_item_values["vm,board_private,rootfs"], num) = board_cfg_lib.get_rootfs(board_info)
 
-    # os config
-    (scenario_item_values["vm,os_config,rootfs"], num) = board_cfg_lib.get_rootfs(board_info)
-
     scenario_item_values["hv,DEBUG_OPTIONS,RELEASE"] = hv_cfg_lib.N_Y
     scenario_item_values["hv,DEBUG_OPTIONS,NPK_LOGLEVEL"] = hv_cfg_lib.get_select_range("DEBUG_OPTIONS", "LOG_LEVEL")
     scenario_item_values["hv,DEBUG_OPTIONS,MEM_LOGLEVEL"] = hv_cfg_lib.get_select_range("DEBUG_OPTIONS", "LOG_LEVEL")
@@ -186,11 +183,8 @@ def main(args):
             return err_dic
 
     # generate pci_dev.c
-    for vm_i,pci_dev_num in scenario_items['vm'].cfg_pci.pci_dev_num.items():
-        if pci_dev_num >= 2:
-            with open(pci_config_c, 'w') as config:
-                pci_dev_c.generate_file(scenario_items['vm'], config)
-            break
+    with open(pci_config_c, 'w') as config:
+        pci_dev_c.generate_file(scenario_items['vm'], config)
 
     if not err_dic:
         print("Scenario configurations for {} is generated successfully.".format(scenario))

@@ -94,6 +94,11 @@
 #define ACRN_REQUEST_INIT_VMCS			8U
 
 /**
+ * @brief Request for sync waiting WBINVD
+ */
+#define ACRN_REQUEST_WAIT_WBINVD		9U
+
+/**
  * @}
  */
 /* End of virt_int_injection */
@@ -136,7 +141,6 @@ enum vcpu_state {
 	VCPU_OFFLINE = 0U,
 	VCPU_INIT,
 	VCPU_RUNNING,
-	VCPU_PAUSED,
 	VCPU_ZOMBIE,
 };
 
@@ -149,7 +153,8 @@ enum vm_cpu_mode {
 
 #define	VCPU_EVENT_IOREQ		0
 #define	VCPU_EVENT_VIRTUAL_INTERRUPT	1
-#define	VCPU_EVENT_NUM			2
+#define	VCPU_EVENT_SYNC_WBINVD		2
+#define	VCPU_EVENT_NUM			3
 
 enum reset_mode;
 
@@ -256,8 +261,6 @@ struct acrn_vcpu {
 	uint16_t vcpu_id;	/* virtual identifier for VCPU */
 	struct acrn_vm *vm;		/* Reference to the VM this VCPU belongs to */
 
-	/* State of this VCPU before suspend */
-	volatile enum vcpu_state prev_state;
 	volatile enum vcpu_state state;	/* State of this VCPU */
 
 	struct thread_object thread_obj;
@@ -634,25 +637,14 @@ void reset_vcpu(struct acrn_vcpu *vcpu, enum reset_mode mode);
 /**
  * @brief pause the vcpu and set new state
  *
- * Change a vCPU state to VCPU_PAUSED or VCPU_ZOMBIE, and make a reschedule request for it.
+ * Change a vCPU state to VCPU_ZOMBIE, and make a reschedule request for it.
  *
  * @param[inout] vcpu pointer to vcpu data structure
  * @param[in] new_state the state to set vcpu
  *
  * @return None
  */
-void pause_vcpu(struct acrn_vcpu *vcpu, enum vcpu_state new_state);
-
-/**
- * @brief resume the vcpu
- *
- * Change a vCPU state to VCPU_RUNNING, and make a reschedule request for it.
- *
- * @param[inout] vcpu pointer to vcpu data structure
- *
- * @return 0 on success, -1 on failure.
- */
-int32_t resume_vcpu(struct acrn_vcpu *vcpu);
+void zombie_vcpu(struct acrn_vcpu *vcpu, enum vcpu_state new_state);
 
 /**
  * @brief set the vcpu to running state, then it will be scheculed.
