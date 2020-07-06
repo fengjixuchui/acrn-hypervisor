@@ -206,6 +206,11 @@ static void detect_vmx_mmu_cap(void)
 	cpu_caps.vmx_vpid = (uint32_t) (val >> 32U);
 }
 
+static bool pcpu_vmx_set_32bit_addr_width(void)
+{
+	return ((msr_read(MSR_IA32_VMX_BASIC) & MSR_IA32_VMX_BASIC_ADDR_WIDTH) != 0UL);
+}
+
 static void detect_xsave_cap(void)
 {
 	uint32_t unused;
@@ -385,9 +390,14 @@ static int32_t check_vmx_mmu_cap(void)
 		!pcpu_has_vmx_vpid_cap(VMX_VPID_INVVPID_GLOBAL_CONTEXT)) {
 		printf("%s, invvpid not supported\n", __func__);
 		ret = -ENODEV;
-	} else if (!pcpu_has_vmx_ept_cap(VMX_EPT_1GB_PAGE)) {
-		printf("%s, ept not support 1GB large page\n", __func__);
+	} else if (!pcpu_has_vmx_ept_cap(VMX_EPT_2MB_PAGE)) {
+		printf("%s, ept not support 2MB large page\n", __func__);
 		ret = -ENODEV;
+	} else if (pcpu_has_vmx_ept_cap(VMX_EPT_1GB_PAGE) !=
+				pcpu_has_cap(X86_FEATURE_PAGE1GB)) {
+		/* This just for simple large_page_support in arch/x86/page.c */
+		ret = -ENODEV;
+		printf("%s ept support 1GB large page while mmu is not or opposite\n", __func__);
 	} else {
 		/* No other state currently, do nothing */
 	}
@@ -439,9 +449,6 @@ int32_t detect_hardware_support(void)
 	} else if (!pcpu_has_cap(X86_FEATURE_CLFLUSHOPT)) {
 		printf("%s, CLFLUSHOPT not supported\n", __func__);
 		ret = -ENODEV;
-	} else if (!pcpu_has_cap(X86_FEATURE_PAGE1GB)) {
-		printf("%s, not support 1GB page\n", __func__);
-		ret = -ENODEV;
 	} else if (!pcpu_has_cap(X86_FEATURE_VMX)) {
 		printf("%s, vmx not supported\n", __func__);
 		ret = -ENODEV;
@@ -461,6 +468,9 @@ int32_t detect_hardware_support(void)
 		ret = -ENODEV;
 	} else if (is_vmx_disabled()) {
 		printf("%s, VMX can not be enabled\n", __func__);
+		ret = -ENODEV;
+	} else if (pcpu_vmx_set_32bit_addr_width()) {
+		printf("%s, Only support Intel 64 architecture.\n", __func__);
 		ret = -ENODEV;
 	} else if (!pcpu_has_cap(X86_FEATURE_X2APIC)) {
 		printf("%s, x2APIC not supported\n", __func__);

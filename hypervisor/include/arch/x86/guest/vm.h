@@ -88,7 +88,7 @@ enum vm_state {
 	VM_PAUSED,	/* VM paused */
 };
 
-enum vm_vlapic_state {
+enum vm_vlapic_mode {
 	VM_VLAPIC_DISABLED = 0U,
 	VM_VLAPIC_XAPIC,
 	VM_VLAPIC_X2APIC,
@@ -113,7 +113,7 @@ struct vm_arch {
 #ifdef CONFIG_HYPERV_ENABLED
 	struct acrn_hyperv hyperv;
 #endif
-	enum vm_vlapic_state vlapic_state; /* Represents vLAPIC state across vCPUs*/
+	enum vm_vlapic_mode vlapic_mode; /* Represents vLAPIC mode across vCPUs*/
 
 	/* reference to virtual platform to come here (as needed) */
 } __aligned(PAGE_SIZE);
@@ -130,7 +130,7 @@ struct acrn_vm {
 	struct acrn_vuart vuart[MAX_VUART_NUM_PER_VM];		/* Virtual UART */
 	enum vpic_wire_mode wire_mode;
 	struct iommu_domain *iommu;	/* iommu domain of this VM */
-	spinlock_t vm_lock;	/* Spin-lock used to protect vlapic_state modifications for a VM */
+	spinlock_t vlapic_mode_lock;	/* Spin-lock used to protect vlapic_mode modifications for a VM */
 	spinlock_t ept_lock;	/* Spin-lock used to protect ept add/modify/remove for a VM */
 
 	spinlock_t emul_mmio_lock;	/* Used to protect emulation mmio_node concurrent access for a VM */
@@ -208,18 +208,6 @@ static inline uint16_t vmid_2_rel_vmid(uint16_t sos_vmid, uint16_t vmid) {
 	return (vmid - sos_vmid);
 }
 
-/**
- * @brief Check if the specified vdev is a zombie VF instance
- *
- * @param vdev Pointer to vdev instance
- *
- * @return If the vdev is a zombie VF instance return true, otherwise return false
- */
-static inline bool is_zombie_vf(const struct pci_vdev *vdev)
-{
-	return (vdev->vpci == NULL);
-}
-
 void make_shutdown_vm_request(uint16_t pcpu_id);
 bool need_shutdown_vm(uint16_t pcpu_id);
 int32_t shutdown_vm(struct acrn_vm *vm);
@@ -257,7 +245,7 @@ bool has_rt_vm(void);
 struct acrn_vm *get_highest_severity_vm(bool runtime);
 bool vm_hide_mtrr(const struct acrn_vm *vm);
 void update_vm_vlapic_state(struct acrn_vm *vm);
-enum vm_vlapic_state check_vm_vlapic_state(const struct acrn_vm *vm);
+enum vm_vlapic_mode check_vm_vlapic_mode(const struct acrn_vm *vm);
 #endif /* !ASSEMBLER */
 
 #endif /* VM_H_ */

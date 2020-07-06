@@ -581,20 +581,32 @@ def check_vuart(v0_vuart, v1_vuart):
             ERR_LIST[key] = "target_vm_id should be numeric of vm id"
         vm_target_id_dic[vm_i] = vuart_dic['target_vm_id']
 
+    connect_set = False
+    target_id_keys = list(vm_target_id_dic.keys())
+    i = 0
     for vm_i,t_vm_id in vm_target_id_dic.items():
-        if t_vm_id.isnumeric() and  int(t_vm_id) not in common.VM_TYPES.keys():
+        if t_vm_id.isnumeric() and int(t_vm_id) not in common.VM_TYPES.keys():
             key = "vm:id={},vuart:id=1,target_vm_id".format(vm_i)
             ERR_LIST[key] = "target_vm_id which specified does not exist"
 
+        idx = target_id_keys.index(vm_i)
+        i = idx
+        for j in range(idx + 1, len(target_id_keys)):
+            vm_j = target_id_keys[j]
+            if int(vm_target_id_dic[vm_i]) == vm_j and int(vm_target_id_dic[vm_j]) == vm_i:
+                connect_set = True
+
+    if not connect_set and len(target_id_keys) >= 2:
+        key = "vm:id={},vuart:id=1,target_vm_id".format(i)
+        ERR_LIST[key] = "Creating the wrong configuration for target_vm_id."
+
 
 def vcpu_clos_check(cpus_per_vm, clos_per_vm, prime_item, item):
-    common_clos_max = 0
-    cdp_enabled = cdp_enabled = common.get_hv_item_tag(common.SCENARIO_INFO_FILE, "FEATURES", "RDT", "CDP_ENABLED")
-    (rdt_resources, rdt_res_clos_max, _) = board_cfg_lib.clos_info_parser(common.BOARD_INFO_FILE)
-    if len(rdt_resources) != 0 and len(rdt_res_clos_max) != 0:
-        common_clos_max = min(rdt_res_clos_max)
-        if cdp_enabled == 'y':
-            common_clos_max //= 2
+
+    if not board_cfg_lib.is_rdt_enabled():
+        return
+
+    common_clos_max = board_cfg_lib.get_common_clos_max()
 
     for vm_i,vcpus in cpus_per_vm.items():
         clos_per_vm_len = 0
@@ -606,7 +618,7 @@ def vcpu_clos_check(cpus_per_vm, clos_per_vm, prime_item, item):
             ERR_LIST[key] = "'vcpu_clos' number should be equal 'pcpu_id' number for VM{}".format(vm_i)
             return
 
-        if cdp_enabled == 'y' and common_clos_max != 0:
+        if board_cfg_lib.is_cdp_enabled() and common_clos_max != 0:
             for clos_val in clos_per_vm[vm_i]:
                 if not clos_val or clos_val == None:
                     key = "vm:id={},{},{}".format(vm_i, prime_item, item)

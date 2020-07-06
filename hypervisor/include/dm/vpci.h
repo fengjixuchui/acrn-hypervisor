@@ -32,7 +32,10 @@
 
 #include <spinlock.h>
 #include <pci.h>
+#include <list.h>
 
+#define VDEV_LIST_HASHBITS 4U
+#define VDEV_LIST_HASHSIZE (1U << VDEV_LIST_HASHBITS)
 
 struct pci_vbar {
 	enum pci_bar_type type;
@@ -67,6 +70,8 @@ struct pci_msix {
 	uint32_t  table_bar;
 	uint32_t  table_offset;
 	uint32_t  table_count;
+	bool      is_vmsix_on_msi;
+	bool	  is_vmsix_on_msi_programmed;
 };
 
 /* SRIOV capability structure */
@@ -132,7 +137,8 @@ struct pci_vdev {
 	 * user       | vdev in HV | vdev in pre-VM |   vdev in SOS  |   vdev in post-VM  | vdev in post-VM
 	 */
 	struct pci_vdev *parent_user;
-	struct pci_vdev *user;
+	struct pci_vdev *user;	/* NULL means this device is not used or is a zombie VF */
+	struct hlist_node link;
 };
 
 union pci_cfg_addr_reg {
@@ -151,6 +157,7 @@ struct acrn_vpci {
 	uint64_t pci_mmcfg_base;
 	uint32_t pci_vdev_cnt;
 	struct pci_vdev pci_vdevs[CONFIG_MAX_PCI_DEV_NUM];
+	struct hlist_head vdevs_hlist_heads [VDEV_LIST_HASHSIZE];
 };
 
 struct acrn_vm;

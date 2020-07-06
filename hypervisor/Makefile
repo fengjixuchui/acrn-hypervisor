@@ -78,6 +78,9 @@ CFLAGS += -m64 -mno-mmx -mno-sse -mno-sse2 -mno-80387 -mno-fp-ret-in-387
 CFLAGS += -mno-red-zone -mpopcnt
 CFLAGS += -nostdinc -nostdlib -fno-common
 CFLAGS += -Werror
+
+# ACRN depends on zero length array. Silence the gcc if Warrary-bounds is default option
+CFLAGS += -Wno-array-bounds
 CFLAGS += -O2
 ifeq (y, $(CONFIG_RELOC))
 CFLAGS += -fpie
@@ -301,6 +304,7 @@ VP_DM_C_SRCS += dm/vpci/vpci_bridge.c
 VP_DM_C_SRCS += dm/vpci/pci_pt.c
 VP_DM_C_SRCS += dm/vpci/vmsi.c
 VP_DM_C_SRCS += dm/vpci/vmsix.c
+VP_DM_C_SRCS += dm/vpci/vmsix_on_msi.c
 VP_DM_C_SRCS += dm/vpci/vsriov.c
 VP_DM_C_SRCS += arch/x86/guest/vlapic.c
 VP_DM_C_SRCS += arch/x86/guest/pm.c
@@ -527,6 +531,8 @@ $(VERSION): $(HV_OBJDIR)/$(HV_CONFIG_H)
 	echo "#define HV_BUILD_TYPE "\""$$BUILD_TYPE"\""" >> $(VERSION);\
 	echo "#define HV_BUILD_TIME "\""$$TIME"\""" >> $(VERSION);\
 	echo "#define HV_BUILD_USER "\""$$USER"\""" >> $(VERSION);\
+	echo "#define HV_BUILD_SCENARIO "\"$(SCENARIO)\""" >> $(VERSION);\
+	echo "#define HV_BUILD_BOARD "\"$(BOARD)\""" >> $(VERSION);\
 	if [ "$(CONFIG_XML_ENABLED)" = "true" ]; then \
 		echo "#define HV_CONFIG_TOOL \" with acrn-config\"" >> $(VERSION);\
 	else	\

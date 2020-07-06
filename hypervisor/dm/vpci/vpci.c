@@ -37,6 +37,7 @@
 #include <logmsg.h>
 #include "vpci_priv.h"
 #include "pci_dev.h"
+#include <hash.h>
 
 static void vpci_init_vdevs(struct acrn_vm *vm);
 static int32_t vpci_read_cfg(struct acrn_vpci *vpci, union pci_bdf bdf, uint32_t offset, uint32_t bytes, uint32_t *val);
@@ -99,21 +100,6 @@ static bool vpci_pio_cfgaddr_write(struct acrn_vcpu *vcpu, uint16_t addr, size_t
 	return ret;
 }
 
-static inline bool vpci_is_valid_access_offset(uint32_t offset, uint32_t bytes)
-{
-	return ((offset & (bytes - 1U)) == 0U);
-}
-
-static inline bool vpci_is_valid_access_byte(uint32_t bytes)
-{
-	return ((bytes == 1U) || (bytes == 2U) || (bytes == 4U));
-}
-
-static inline bool vpci_is_valid_access(uint32_t offset, uint32_t bytes)
-{
-	return (vpci_is_valid_access_byte(bytes) && vpci_is_valid_access_offset(offset, bytes));
-}
-
 /**
  * @pre vcpu != NULL
  * @pre vcpu->vm != NULL
@@ -137,7 +123,7 @@ static bool vpci_pio_cfgdata_read(struct acrn_vcpu *vcpu, uint16_t addr, size_t 
 
 	cfg_addr.value = atomic_readandclear32(&vpci->addr.value);
 	if (cfg_addr.bits.enable != 0U) {
-		if (vpci_is_valid_access(cfg_addr.bits.reg_num + offset, bytes)) {
+		if (pci_is_valid_access(cfg_addr.bits.reg_num + offset, bytes)) {
 			bdf.value = cfg_addr.bits.bdf;
 			ret = vpci_read_cfg(vpci, bdf, cfg_addr.bits.reg_num + offset, bytes, &val);
 		}
@@ -168,7 +154,7 @@ static bool vpci_pio_cfgdata_write(struct acrn_vcpu *vcpu, uint16_t addr, size_t
 
 	cfg_addr.value = atomic_readandclear32(&vpci->addr.value);
 	if (cfg_addr.bits.enable != 0U) {
-		if (vpci_is_valid_access(cfg_addr.bits.reg_num + offset, bytes)) {
+		if (pci_is_valid_access(cfg_addr.bits.reg_num + offset, bytes)) {
 			bdf.value = cfg_addr.bits.bdf;
 			ret = vpci_write_cfg(vpci, bdf, cfg_addr.bits.reg_num + offset, bytes, val);
 		}
@@ -500,7 +486,11 @@ static int32_t write_pt_dev_cfg(struct pci_vdev *vdev, uint32_t offset,
 	} else if (msicap_access(vdev, offset)) {
 		write_vmsi_cap_reg(vdev, offset, bytes, val);
 	} else if (msixcap_access(vdev, offset)) {
-		write_vmsix_cap_reg(vdev, offset, bytes, val);
+		if (vdev->msix.is_vmsix_on_msi) {
+			write_vmsix_cap_reg_on_msi(vdev, offset, bytes, val);
+		} else {
+			write_vmsix_cap_reg(vdev, offset, bytes, val);
+		}
 	} else if (sriovcap_access(vdev, offset)) {
 		write_sriov_cap_reg(vdev, offset, bytes, val);
 	} else {
@@ -623,6 +613,7 @@ struct pci_vdev *vpci_init_vdev(struct acrn_vpci *vpci, struct acrn_vm_pci_dev_c
 	vdev->pci_dev_config = dev_config;
 	vdev->phyfun = parent_pf_vdev;
 
+	hlist_add_head(&vdev->link, &vpci->vdevs_hlist_heads[hash64(dev_config->vbdf.value, VDEV_LIST_HASHBITS)]);
 	if (dev_config->vdev_ops != NULL) {
 		vdev->vdev_ops = dev_config->vdev_ops;
 	} else {
@@ -722,6 +713,9 @@ int32_t vpci_assign_pcidev(struct acrn_vm *tgt_vm, struct acrn_assign_pcidev *pc
 
 		vdev->flags |= pcidev->type;
 		vdev->bdf.value = pcidev->virt_bdf;
+		/*We should re-add the vdev to hashlist since its vbdf has changed */
+		hlist_del(&vdev->link);
+		hlist_add_head(&vdev->link, &vpci->vdevs_hlist_heads[hash64(vdev->bdf.value, VDEV_LIST_HASHBITS)]);
 		vdev->parent_user = vdev_in_sos;
 		spinlock_release(&tgt_vm->vpci.lock);
 		vdev_in_sos->user = vdev;

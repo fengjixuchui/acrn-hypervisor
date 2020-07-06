@@ -189,6 +189,7 @@ else:
 html_context = {
    'current_version': current_version,
    'versions': ( ("latest", "/latest/"),
+                 ("2.0", "/2.0/"),
                  ("1.6.1", "/1.6.1/"),
                  ("1.6", "/1.6/"),
                  ("1.5", "/1.5/"),
@@ -239,6 +240,10 @@ html_show_sourcelink = False
 # bottom,
 # using the given strftime format.
 html_last_updated_fmt = '%b %d, %Y'
+
+# The name of a javascript file (relative to the configuration directory) that
+# implements a search results scorer. If empty, the default will be used.
+html_search_scorer = 'scorer.js'
 
 # -- Options for HTMLHelp output ------------------------------------------
 

@@ -31,6 +31,8 @@
 #ifndef PCI_H_
 #define PCI_H_
 
+#include <list.h>
+
 /*
  * PCIM_xxx: mask to locate subfield in register
  * PCIR_xxx: config register offset
@@ -228,6 +230,9 @@ struct pci_pdev {
 
 	/* IOMMU responsible for DMA and Interrupt Remapping for this device */
 	uint32_t drhd_index;
+	/* Used for vMSI-x on MSI emulation */
+	uint16_t irte_start;
+	uint16_t irte_count;
 
 	/* The bar info of the physical PCI device. */
 	uint32_t nr_bars; /* 6 for normal device, 2 for bridge, 1 for cardbus */
@@ -245,6 +250,7 @@ struct pci_pdev {
 	bool has_pm_reset;
 	bool has_flr;
 	bool has_af_flr;
+	struct hlist_node link;
 };
 
 struct pci_cfg_ops {
@@ -335,12 +341,12 @@ void enable_disable_pci_intx(union pci_bdf bdf, bool enable);
 void init_pci_pdev_list(void);
 
 /* @brief: Find the DRHD index corresponding to a PCI device
- * Runs through the pci_pdev_array and returns the value in drhd_idx
+ * Runs through the pci_pdevs and returns the value in drhd_idx
  * member from pdev strucutre that matches matches B:D.F
  *
  * @pbdf[in]	B:D.F of a PCI device
  *
- * @return if there is a matching pbdf in pci_pdev_array, pdev->drhd_idx, else -1U
+ * @return if there is a matching pbdf in pci_pdevs, pdev->drhd_idx, else -1U
  */
 uint32_t pci_lookup_drhd_for_pbdf(uint16_t pbdf);
 
@@ -355,8 +361,24 @@ static inline bool is_pci_cfg_multifunction(uint8_t header_type)
 	return ((header_type & PCIM_MFDEV) == PCIM_MFDEV);
 }
 
+static inline bool pci_is_valid_access_offset(uint32_t offset, uint32_t bytes)
+{
+	return ((offset & (bytes - 1U)) == 0U);
+}
+
+static inline bool pci_is_valid_access_byte(uint32_t bytes)
+{
+	return ((bytes == 1U) || (bytes == 2U) || (bytes == 4U));
+}
+
+static inline bool pci_is_valid_access(uint32_t offset, uint32_t bytes)
+{
+	return (pci_is_valid_access_byte(bytes) && pci_is_valid_access_offset(offset, bytes));
+}
+
 bool is_plat_hidden_pdev(union pci_bdf bdf);
 bool pdev_need_bar_restore(const struct pci_pdev *pdev);
 void pdev_restore_bar(const struct pci_pdev *pdev);
 void pci_switch_to_mmio_cfg_ops(void);
+void reserve_vmsix_on_msi_irtes(struct pci_pdev *pdev);
 #endif /* PCI_H_ */

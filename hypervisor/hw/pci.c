@@ -43,10 +43,15 @@
 #include <bits.h>
 #include <board.h>
 #include <platform_acpi_info.h>
+#include <hash.h>
+#include <util.h>
 
-static spinlock_t pci_device_lock;
+#define PDEV_HLIST_HASHBITS 6U
+#define PDEV_HLIST_HASHSIZE (1U << PDEV_HLIST_HASHBITS)
+
 static uint32_t num_pci_pdev;
-static struct pci_pdev pci_pdev_array[CONFIG_MAX_PCI_DEV_NUM];
+static struct pci_pdev pci_pdevs[CONFIG_MAX_PCI_DEV_NUM];
+static struct hlist_head pdevs_hlist_heads[PDEV_HLIST_HASHSIZE];
 static uint64_t pci_mmcfg_base = DEFAULT_PCI_MMCFG_BASE;
 
 #ifdef CONFIG_ACPI_PARSE_ENABLED
@@ -138,19 +143,28 @@ static const struct pci_cfg_ops pci_pio_cfg_ops = {
 
 /*
  * @pre offset < 0x1000U
+ * @pre pci_mmcfg_base 4K-byte alignment
  */
 static inline uint32_t mmcfg_off_to_address(union pci_bdf bdf, uint32_t offset)
 {
 	return (uint32_t)pci_mmcfg_base + (((uint32_t)bdf.value << 12U) | offset);
 }
 
+/*
+ * @pre bytes == 1U || bytes == 2U || bytes == 4U
+ * @pre offset 1-byte  alignment if byte == 1U
+ *             2-byte alignment if byte == 2U
+ *             4-byte alignment if byte == 4U
+ */
 static uint32_t pci_mmcfg_read_cfg(union pci_bdf bdf, uint32_t offset, uint32_t bytes)
 {
 	uint32_t addr = mmcfg_off_to_address(bdf, offset);
 	void *hva = hpa2hva(addr);
 	uint32_t val;
 
-	spinlock_obtain(&pci_device_lock);
+
+	ASSERT(pci_is_valid_access(offset, bytes), "the offset should be aligned with 2/4 byte\n");
+
 	switch (bytes) {
 	case 1U:
 		val = (uint32_t)mmio_read8(hva);
@@ -162,20 +176,22 @@ static uint32_t pci_mmcfg_read_cfg(union pci_bdf bdf, uint32_t offset, uint32_t 
 		val = mmio_read32(hva);
 		break;
 	}
-	spinlock_release(&pci_device_lock);
 
 	return val;
 }
 
 /*
  * @pre bytes == 1U || bytes == 2U || bytes == 4U
+ * @pre offset 1-byte alignment  if byte == 1U
+ *             2-byte alignment if byte == 2U
+ *             4-byte alignment if byte == 4U
  */
 static void pci_mmcfg_write_cfg(union pci_bdf bdf, uint32_t offset, uint32_t bytes, uint32_t val)
 {
 	uint32_t addr = mmcfg_off_to_address(bdf, offset);
 	void *hva = hpa2hva(addr);
 
-	spinlock_obtain(&pci_device_lock);
+	ASSERT(pci_is_valid_access(offset, bytes), "the offset should be aligned with 2/4 byte\n");
 	switch (bytes) {
 	case 1U:
 		mmio_write8((uint8_t)val, hva);
@@ -187,7 +203,6 @@ static void pci_mmcfg_write_cfg(union pci_bdf bdf, uint32_t offset, uint32_t byt
 		mmio_write32(val, hva);
 		break;
 	}
-	spinlock_release(&pci_device_lock);
 }
 
 static const struct pci_cfg_ops pci_mmcfg_cfg_ops = {
@@ -258,28 +273,34 @@ void pdev_restore_bar(const struct pci_pdev *pdev)
 	}
 }
 
+static const struct pci_pdev *pci_find_pdev(uint16_t pbdf)
+{
+	struct hlist_node *n;
+	const struct pci_pdev *found = NULL, *tmp;
+
+	hlist_for_each (n, &pdevs_hlist_heads[hash64(pbdf, PDEV_HLIST_HASHBITS)]) {
+		tmp = hlist_entry(n, struct pci_pdev, link);
+		if (pbdf == tmp->bdf.value) {
+			found = tmp;
+			break;
+		}
+	}
+	return found;
+}
+
 /* @brief: Find the DRHD index corresponding to a PCI device
- * Runs through the pci_pdev_array and returns the value in drhd_idx
+ * Runs through the pci_pdevs and returns the value in drhd_idx
  * member from pdev structure that matches matches B:D.F
  *
  * @pbdf[in]	B:D.F of a PCI device
  *
- * @return if there is a matching pbdf in pci_pdev_array, pdev->drhd_idx, else INVALID_DRHD_INDEX
+ * @return if there is a matching pbdf in pci_pdevs, pdev->drhd_idx, else INVALID_DRHD_INDEX
  */
 
 uint32_t pci_lookup_drhd_for_pbdf(uint16_t pbdf)
 {
-	uint32_t drhd_index = INVALID_DRHD_INDEX;
-	uint32_t index;
-
-	for (index = 0U; index < num_pci_pdev; index++) {
-		if (pci_pdev_array[index].bdf.value == pbdf) {
-			drhd_index = pci_pdev_array[index].drhd_index;
-			break;
-		}
-	}
-
-	return drhd_index;
+	const struct pci_pdev *pdev = pci_find_pdev(pbdf);
+	return (pdev != NULL) ? pdev->drhd_index : INVALID_DRHD_INDEX;
 }
 
 /* enable: 1: enable INTx; 0: Disable INTx */
@@ -501,11 +522,11 @@ static void pci_parse_iommu_devscopes(struct pci_bdf_mapping_group *const bdfs_f
 				 */
 			}
 		}
-	}
 
-	if ((plat_dmar_info.drhd_units[plat_dmar_info.drhd_count - 1U].flags & DRHD_FLAG_INCLUDE_PCI_ALL_MASK)
-			== DRHD_FLAG_INCLUDE_PCI_ALL_MASK) {
-		*drhd_idx_pci_all = plat_dmar_info.drhd_count - 1U;
+		if ((plat_dmar_info.drhd_units[drhd_index].flags & DRHD_FLAG_INCLUDE_PCI_ALL_MASK)
+				== DRHD_FLAG_INCLUDE_PCI_ALL_MASK) {
+			*drhd_idx_pci_all = drhd_index;
+		}
 	}
 }
 
@@ -561,7 +582,7 @@ static void init_all_dev_config(void)
 	struct pci_pdev *pdev = NULL;
 
 	for (idx = 0U; idx < num_pci_pdev; idx++) {
-		pdev = &pci_pdev_array[idx];
+		pdev = &pci_pdevs[idx];
 
 		if (is_bridge(pdev)) {
 			config_pci_bridge(pdev);
@@ -603,9 +624,6 @@ void init_pci_pdev_list(void)
 	uint32_t drhd_idx_pci_all = INVALID_DRHD_INDEX;
 	uint16_t bus;
 	bool was_visited = false;
-
-	/* explicitly init the lock before using it */
-	spinlock_init(&pci_device_lock);
 
 	pci_parse_iommu_devscopes(&bdfs_from_drhds, &drhd_idx_pci_all);
 
@@ -751,7 +769,7 @@ struct pci_pdev *init_pdev(uint16_t pbdf, uint32_t drhd_index)
 		hdr_layout = (hdr_type & PCIM_HDRTYPE);
 
 		if ((hdr_layout == PCIM_HDRTYPE_NORMAL) || (hdr_layout == PCIM_HDRTYPE_BRIDGE)) {
-			pdev = &pci_pdev_array[num_pci_pdev];
+			pdev = &pci_pdevs[num_pci_pdev];
 			pdev->bdf.value = pbdf;
 			pdev->hdr_type = hdr_type;
 			pdev->base_class = (uint8_t)pci_pdev_read_cfg(bdf, PCIR_CLASS, 1U);
@@ -765,8 +783,10 @@ struct pci_pdev *init_pdev(uint16_t pbdf, uint32_t drhd_index)
 				pci_enumerate_cap(pdev);
 			}
 
+			hlist_add_head(&pdev->link, &pdevs_hlist_heads[hash64(pbdf, PDEV_HLIST_HASHBITS)]);
 			pdev->drhd_index = drhd_index;
 			num_pci_pdev++;
+			reserve_vmsix_on_msi_irtes(pdev);
 		} else {
 			pr_err("%s, %x:%x.%x unsupported headed type: 0x%x\n",
 				__func__, bdf.bits.b, bdf.bits.d, bdf.bits.f, hdr_type);

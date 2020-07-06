@@ -18,6 +18,7 @@
             <RDT_ENABLED desc="Enable RDT">n</RDT_ENABLED>
             <CDP_ENABLED desc="CDP (Code and Data Prioritization). CDP is an extension of CAT.">n</CDP_ENABLED>
             <CLOS_MASK desc="Cache Capacity Bitmask"></CLOS_MASK>
+            <MBA_DELAY desc="Memory Bandwidth Allocation delay value">0</MBA_DELAY>
         </RDT>
         <HYPERV_ENABLED desc="Enable Hyper-V enlightenment">y</HYPERV_ENABLED>
         <IOMMU_ENFORCE_SNP desc="IOMMU enforce snoop behavior of DMA operation.">n</IOMMU_ENFORCE_SNP>
@@ -80,7 +81,7 @@
         <size_hpa2 desc="Memory size of second HPA for non-contiguous allocations in Bytes for the VM">0x0</size_hpa2>
     </memory>
     <os_config>
-        <name desc="Specify the OS name of VM, currently it is not referenced by hypervisor code.">ClearLinux</name>
+        <name desc="Specify the OS name of VM, currently it is not referenced by hypervisor code.">YOCTO</name>
         <kern_type desc="Specify the kernel image type so that hypervisor could load it correctly. Currently support KERNEL_BZIMAGE and KERNEL_ZEPHYR.">KERNEL_BZIMAGE</kern_type>
         <kern_mod desc="The tag for kernel image which act as multiboot module, it must exactly match the module tag in GRUB multiboot cmdline.">Linux_bzImage</kern_mod>
         <ramdisk_mod desc="The tag for ramdisk image which act as multiboot module, it must exactly match the module tag in GRUB multiboot cmdline."></ramdisk_mod>
@@ -132,7 +133,7 @@
         <size_hpa2 desc="Memory size of second HPA for non-contiguous allocations in Bytes for the VM">0x0</size_hpa2>
     </memory>
     <os_config>
-        <name desc="Specify the OS name of VM, currently it is not referenced by hypervisor code.">ClearLinux</name>
+        <name desc="Specify the OS name of VM, currently it is not referenced by hypervisor code.">YOCTO</name>
         <kern_type desc="kernel name">KERNEL_BZIMAGE</kern_type>
         <kern_mod desc="The tag for kernel image which act as multiboot module, it must exactly match the module tag in GRUB multiboot cmdline.">Linux_bzImage</kern_mod>
         <ramdisk_mod desc="The tag for ramdisk image which act as multiboot module, it must exactly match the module tag in GRUB multiboot cmdline."></ramdisk_mod>

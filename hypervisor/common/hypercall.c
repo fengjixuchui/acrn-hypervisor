@@ -457,15 +457,16 @@ int32_t hcall_inject_msi(struct acrn_vm *vm, uint16_t vmid, uint64_t param)
 		if (copy_from_gpa(vm, &msi, param, sizeof(msi)) == 0) {
 			/* For target cpu with lapic pt, send ipi instead of injection via vlapic */
 			if (is_lapic_pt_configured(target_vm)) {
-				enum vm_vlapic_state vlapic_state = check_vm_vlapic_state(target_vm);
-				if (vlapic_state == VM_VLAPIC_X2APIC) {
+				enum vm_vlapic_mode vlapic_mode = check_vm_vlapic_mode(target_vm);
+
+				if (vlapic_mode == VM_VLAPIC_X2APIC) {
 					/*
 					 * All the vCPUs of VM are in x2APIC mode and LAPIC is PT
 					 * Inject the vMSI as an IPI directly to VM
 					 */
 					inject_msi_lapic_pt(target_vm, &msi);
 					ret = 0;
-				} else if (vlapic_state == VM_VLAPIC_XAPIC) {
+				} else if (vlapic_mode == VM_VLAPIC_XAPIC) {
 					/*
 					 * All the vCPUs of VM are in xAPIC and use vLAPIC
 					 * Inject using vLAPIC
@@ -834,12 +835,13 @@ int32_t hcall_assign_pcidev(struct acrn_vm *vm, uint16_t vmid, uint64_t param)
 	struct acrn_assign_pcidev pcidev;
 	struct acrn_vm *target_vm = get_vm_from_vmid(vmid);
 
-	if (!is_poweroff_vm(target_vm) && is_postlaunched_vm(target_vm)) {
+	/* We should only assign a device to a post-launched VM at creating time for safety, not runtime or other cases*/
+	if (is_created_vm(target_vm) && is_postlaunched_vm(target_vm)) {
 		if (copy_from_gpa(vm, &pcidev, param, sizeof(pcidev)) == 0) {
 			ret = vpci_assign_pcidev(target_vm, &pcidev);
 		}
 	} else {
-		pr_err("%s, vm[%d] is invalid\n", __func__, vm->vm_id);
+		pr_err("%s, vm[%d] is not a postlaunched VM, or not in CREATED status to be assigned with a pcidev\n", __func__, vm->vm_id);
 	}
 
 	return ret;
@@ -862,12 +864,13 @@ int32_t hcall_deassign_pcidev(struct acrn_vm *vm, uint16_t vmid, uint64_t param)
 	struct acrn_assign_pcidev pcidev;
 	struct acrn_vm *target_vm = get_vm_from_vmid(vmid);
 
-	if (!is_poweroff_vm(target_vm) && is_postlaunched_vm(target_vm)) {
+	/* We should only de-assign a device from a post-launched VM at creating/shutdown/reset time */
+	if ((is_paused_vm(target_vm) || is_created_vm(target_vm)) && is_postlaunched_vm(target_vm)) {
 		if (copy_from_gpa(vm, &pcidev, param, sizeof(pcidev)) == 0) {
 			ret = vpci_deassign_pcidev(target_vm, &pcidev);
 		}
 	} else {
-		pr_err("%s, vm[%d] is invalid\n", __func__, vm->vm_id);
+		pr_err("%s, vm[%d] is not a postlaunched VM, or not in PAUSED/CREATED status to be deassigned from a pcidev\n", __func__, vm->vm_id);
 	}
 
 	return ret;
