@@ -59,17 +59,35 @@
 
 #define PCI_BDF_GPU			0x00000010	/* 00:02.0 */
 
-#define GPU_DSM_SIZE			0x4000000
-/* set dsm gpa=0xDB000000, which is reserved in e820 table */
-#define GPU_DSM_GPA  			0xDB000000
-
-#define GPU_OPREGION_SIZE		0x3000
-/* set opregion gpa=0xDFFFD000, which is reserved in e820 table.
- * [0xDFFFD000, 0XE0000000] 12K opregion has reserved for GVT-g,
- * because GVT-d is not compatible with GVT-g,
- * so here can use [0xDFFFD000, 0XE0000000] region.
+/* Reserved [0x DF000000, 0x E0000000] 16M in e820 table for GVT
+ * [0xDB000000, 0xDF000000) 64M, DSM, used by native GOP and gfx driver
+ * for GVT-g use:
+ * [0xDF000000, 0xDF800000)  8M, GOP FB, used OvmfPkg/GvtGopDxe for 1080p@30
+ * [0xDFFFD000, 0xDFFFF000)  8K, OpRegion, used by GvtGopDxe and GVT-g
+ * [0xDFFFF000, 0XE0000000)  4K, Reserved, not used
+ * for GVT-d use:
+ * [0xDFFFC000, 0xDFFFE000)  8K, OpRegion, used by native GOP and gfx driver
+ * [0xDFFFE000, 0XE0000000]  8K, Extended OpRegion, store raw VBT
+ * 
+ * OpRegion: 8KB(0x2000)
+ * [ OpRegion Header      ] Offset: 0x0
+ * [ Mailbox #1: ACPI     ] Offset: 0x100
+ * [ Mailbox #2: SWSCI    ] Offset: 0x200
+ * [ Mailbox #3: ASLE     ] Offset: 0x300
+ * [ Mailbox #4: VBT      ] Offset: 0x400
+ * [ Mailbox #5: ASLE EXT ] Offset: 0x1C00
+ * Extended OpRegion: 8KB(0x2000)
+ * [ Raw VBT              ] Offset: 0x0
+ * If VBT <= 6KB, stores in Mailbox #4
+ * If VBT > 6KB, stores in Extended OpRegion
+ * ASLE.rvda stores the location of VBT.
+ * For OpRegion 2.1+: ASLE.rvda = offset to OpRegion base address
+ * For OpRegion 2.0:  ASLE.rvda = physical address, not support currently
  */
-#define GPU_OPREGION_GPA  		0xDFFFD000
+#define GPU_DSM_GPA  			0xDB000000
+#define GPU_DSM_SIZE			0x4000000
+#define GPU_OPREGION_GPA  		0xDFFFC000
+#define GPU_OPREGION_SIZE		0x4000
 
 extern uint64_t audio_nhlt_len;
 
@@ -89,6 +107,9 @@ struct passthru_dev {
 	struct {
 		int		capoff;
 	} msix;
+	struct {
+		int 		capoff;
+	} pmcap;
 	bool pcie_cap;
 	struct pcisel sel;
 	int phys_pin;
@@ -98,6 +119,7 @@ struct passthru_dev {
 	 *   need_reset - reset dev before passthrough
 	 */
 	bool need_reset;
+	bool d3hot_reset;
 	bool (*has_virt_pcicfg_regs)(int offset);
 };
 
@@ -165,14 +187,35 @@ cfginit_cap(struct vmctx *ctx, struct passthru_dev *ptdev)
 				ptdev->msi.capoff = ptr;
 			} else if (cap == PCIY_MSIX) {
 				ptdev->msix.capoff = ptr;
-			} else if (cap == PCIY_EXPRESS)
+			} else if (cap == PCIY_EXPRESS) {
 				ptdev->pcie_cap = true;
+			} else if (cap == PCIY_PMG)
+				ptdev->pmcap.capoff = ptr;
 
 			ptr = read_config(phys_dev, ptr + PCICAP_NEXTPTR, 1);
 		}
 	}
 
 	return 0;
+}
+
+static int
+passthru_set_power_state(struct passthru_dev *ptdev, uint16_t dpsts) {
+	int ret = -1;
+	uint32_t val;
+
+	dpsts &= PCIM_PSTAT_DMASK;
+	if (ptdev->pmcap.capoff != 0) {
+		val = read_config(ptdev->phys_dev,
+				ptdev->pmcap.capoff + PCIR_POWER_STATUS, 2);
+		val = (val & ~PCIM_PSTAT_DMASK) | dpsts;
+
+		write_config(ptdev->phys_dev,
+				ptdev->pmcap.capoff + PCIR_POWER_STATUS, 2, val);
+
+		ret = 0;
+	}
+	return ret;
 }
 
 static inline int ptdev_msix_table_bar(struct passthru_dev *ptdev)
@@ -344,6 +387,12 @@ cfginit(struct vmctx *ctx, struct passthru_dev *ptdev, int bus,
 		}
 	}
 
+	if (ptdev->d3hot_reset) {
+		if ((passthru_set_power_state(ptdev, PCIM_PSTAT_D3) != 0) ||
+				passthru_set_power_state(ptdev, PCIM_PSTAT_D0) != 0)
+			warnx("ptdev %x/%x/%x do d3hot_reset failed!\n", bus, slot, func);
+	}
+
 	if (cfginitbar(ctx, ptdev) != 0) {
 		warnx("failed to initialize BARs for PCI %x/%x/%x",
 		    bus, slot, func);
@@ -505,6 +554,7 @@ passthru_init(struct vmctx *ctx, struct pci_vdev *dev, char *opts)
 	char *opt;
 	bool keep_gsi = false;
 	bool need_reset = true;
+	bool d3hot_reset = false;
 	int vmsix_on_msi_bar_id = -1;
 	struct acrn_assign_pcidev pcidev = {};
 	uint16_t vendor = 0, device = 0;
@@ -533,6 +583,8 @@ passthru_init(struct vmctx *ctx, struct pci_vdev *dev, char *opts)
 			keep_gsi = true;
 		else if (!strncmp(opt, "no_reset", 8))
 			need_reset = false;
+		else if (!strncmp(opt, "d3hot_reset", 11))
+			d3hot_reset = true;
 		else if (!strncmp(opt, "gpu", 3)) {
 			/* Create the dedicated "igd-lpc" on 00:1f.0 for IGD passthrough */
 			if (pci_parse_slot("31,igd-lpc") != 0)
@@ -557,6 +609,7 @@ passthru_init(struct vmctx *ctx, struct pci_vdev *dev, char *opts)
 
 	ptdev->phys_bdf = PCI_BDF(bus, slot, func);
 	ptdev->need_reset = need_reset;
+	ptdev->d3hot_reset = d3hot_reset;
 	update_pt_info(ptdev->phys_bdf);
 
 	error = pciaccess_init();

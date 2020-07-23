@@ -265,7 +265,6 @@ struct acrn_vcpu {
 
 	struct thread_object thread_obj;
 	bool launched; /* Whether the vcpu is launched on target pcpu */
-	volatile bool running; /* vcpu is picked up and run? */
 
 	struct instr_emul_ctxt inst_ctxt;
 	struct io_request req; /* used by io/ept emulation */
@@ -667,7 +666,7 @@ void launch_vcpu(struct acrn_vcpu *vcpu);
  *
  * @return None
  */
-void kick_vcpu(const struct acrn_vcpu *vcpu);
+void kick_vcpu(struct acrn_vcpu *vcpu);
 
 /**
  * @brief create a vcpu for the vm and mapped to the pcpu.

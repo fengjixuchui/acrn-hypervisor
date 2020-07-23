@@ -494,11 +494,13 @@ static int32_t write_pt_dev_cfg(struct pci_vdev *vdev, uint32_t offset,
 	} else if (sriovcap_access(vdev, offset)) {
 		write_sriov_cap_reg(vdev, offset, bytes, val);
 	} else {
-		if (!is_quirk_ptdev(vdev)) {
-			/* passthru to physical device */
-			pci_pdev_write_cfg(vdev->pdev->bdf, offset, bytes, val);
-		} else {
-			ret = -ENODEV;
+		if (offset != vdev->pdev->sriov.pre_pos) {
+			if (!is_quirk_ptdev(vdev)) {
+				/* passthru to physical device */
+				pci_pdev_write_cfg(vdev->pdev->bdf, offset, bytes, val);
+			} else {
+				ret = -ENODEV;
+			}
 		}
 	}
 
@@ -519,7 +521,9 @@ static int32_t read_pt_dev_cfg(const struct pci_vdev *vdev, uint32_t offset,
 	} else if (sriovcap_access(vdev, offset)) {
 		read_sriov_cap_reg(vdev, offset, bytes, val);
 	} else {
-		if (!is_quirk_ptdev(vdev)) {
+		if (offset == vdev->pdev->sriov.pre_pos) {
+			*val = pci_vdev_read_vcfg(vdev, offset, bytes);
+		} else if (!is_quirk_ptdev(vdev)) {
 			/* passthru to physical device */
 			*val = pci_pdev_read_cfg(vdev->pdev->bdf, offset, bytes);
 		} else {
@@ -672,15 +676,10 @@ int32_t vpci_assign_pcidev(struct acrn_vm *tgt_vm, struct acrn_assign_pcidev *pc
 	sos_vm = get_sos_vm();
 	spinlock_obtain(&sos_vm->vpci.lock);
 	vdev_in_sos = pci_find_vdev(&sos_vm->vpci, bdf);
-	/*
-	 * TODO We didn't support SR-IOV capability of PF in UOS for now, we should
-	 * hide the SR-IOV capability if we pass through the PF to a UOS.
-	 *
-	 * For now, we don't support assignment of PF to a UOS.
-	 */
 	if ((vdev_in_sos != NULL) && (vdev_in_sos->user == vdev_in_sos) &&
-			(vdev_in_sos->pdev != NULL) && (!has_sriov_cap(vdev_in_sos)) &&
+			(vdev_in_sos->pdev != NULL) &&
 			!is_host_bridge(vdev_in_sos->pdev) && !is_bridge(vdev_in_sos->pdev)) {
+
 		/* ToDo: Each PT device must support one type reset */
 		if (!vdev_in_sos->pdev->has_pm_reset && !vdev_in_sos->pdev->has_flr &&
 				!vdev_in_sos->pdev->has_af_flr) {

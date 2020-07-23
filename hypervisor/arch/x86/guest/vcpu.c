@@ -17,6 +17,7 @@
 #include <vmcs.h>
 #include <mmu.h>
 #include <sprintf.h>
+#include <lapic.h>
 
 /* stack_frame is linked with the sequence of stack operation in arch_switch_to() */
 struct stack_frame {
@@ -200,7 +201,6 @@ static void vcpu_reset_internal(struct acrn_vcpu *vcpu, enum reset_mode mode)
 	struct acrn_vlapic *vlapic;
 
 	vcpu->launched = false;
-	vcpu->running = false;
 	vcpu->arch.nr_sipi = 0U;
 
 	vcpu->arch.exception_info.exception = VECTOR_INVALID;
@@ -673,9 +673,19 @@ void offline_vcpu(struct acrn_vcpu *vcpu)
 	vcpu_set_state(vcpu, VCPU_OFFLINE);
 }
 
-void kick_vcpu(const struct acrn_vcpu *vcpu)
+void kick_vcpu(struct acrn_vcpu *vcpu)
 {
-	kick_thread(&vcpu->thread_obj);
+	uint16_t pcpu_id = pcpuid_from_vcpu(vcpu);
+
+	if ((get_pcpu_id() != pcpu_id) &&
+		(per_cpu(vmcs_run, pcpu_id) == vcpu->arch.vmcs)) {
+		if (is_lapic_pt_enabled(vcpu)) {
+			/* For lapic-pt vCPUs */
+			send_single_nmi(pcpu_id);
+		} else {
+			send_single_ipi(pcpu_id, NOTIFY_VCPU_VECTOR);
+		}
+	}
 }
 
 /*
@@ -731,11 +741,10 @@ void zombie_vcpu(struct acrn_vcpu *vcpu, enum vcpu_state new_state)
 		vcpu_set_state(vcpu, new_state);
 
 		if (prev_state == VCPU_RUNNING) {
-			sleep_thread(&vcpu->thread_obj);
-		}
-		if (pcpu_id != get_pcpu_id()) {
-			while (vcpu->running) {
-				asm_pause();
+			if (pcpu_id == get_pcpu_id()) {
+				sleep_thread(&vcpu->thread_obj);
+			} else {
+				sleep_thread_sync(&vcpu->thread_obj);
 			}
 		}
 	}
@@ -745,14 +754,16 @@ void save_xsave_area(struct ext_context *ectx)
 {
 	ectx->xcr0 = read_xcr(0);
 	ectx->xss = msr_read(MSR_IA32_XSS);
+	write_xcr(0, ectx->xcr0 | XSAVE_SSE);
 	xsaves(&ectx->xs_area, UINT64_MAX);
 }
 
 void rstore_xsave_area(const struct ext_context *ectx)
 {
-	write_xcr(0, ectx->xcr0);
+	write_xcr(0, ectx->xcr0 | XSAVE_SSE);
 	msr_write(MSR_IA32_XSS, ectx->xss);
 	xrstors(&ectx->xs_area, UINT64_MAX);
+	write_xcr(0, ectx->xcr0);
 }
 
 /* TODO:
@@ -772,8 +783,6 @@ static void context_switch_out(struct thread_object *prev)
 	ectx->ia32_kernel_gs_base = msr_read(MSR_IA32_KERNEL_GS_BASE);
 
 	save_xsave_area(ectx);
-
-	vcpu->running = false;
 }
 
 static void context_switch_in(struct thread_object *next)
@@ -789,8 +798,6 @@ static void context_switch_in(struct thread_object *next)
 	msr_write(MSR_IA32_KERNEL_GS_BASE, ectx->ia32_kernel_gs_base);
 
 	rstore_xsave_area(ectx);
-
-	vcpu->running = true;
 }
 
 
