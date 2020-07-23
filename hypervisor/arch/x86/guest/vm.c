@@ -32,6 +32,7 @@
 #include <pci_dev.h>
 #include <vacpi.h>
 #include <platform_caps.h>
+#include <mmio_dev.h>
 
 vm_sw_loader_t vm_sw_loader;
 
@@ -92,6 +93,10 @@ bool is_postlaunched_vm(const struct acrn_vm *vm)
 	return (get_vm_config(vm->vm_id)->load_order == POST_LAUNCHED_VM);
 }
 
+bool is_valid_postlaunched_vmid(uint16_t vm_id)
+{
+	return ((vm_id < CONFIG_MAX_VM_NUM) && is_postlaunched_vm(get_vm_from_vmid(vm_id)));
+}
 /**
  * @pre vm != NULL
  * @pre vm->vmid < CONFIG_MAX_VM_NUM
@@ -257,6 +262,10 @@ static void prepare_prelaunched_vm_memmap(struct acrn_vm *vm, const struct acrn_
 			remaining_hpa_size = vm_config->memory.size_hpa2;
 		}
 	}
+
+	for (i = 0U; i < MAX_MMIO_DEV_NUM; i++) {
+		(void)assign_mmio_dev(vm, &vm_config->mmiodevs[i]);
+	}
 }
 
 /**
@@ -327,6 +336,10 @@ static void prepare_sos_vm_memmap(struct acrn_vm *vm)
 		vm_config = get_vm_config(vm_id);
 		if (vm_config->load_order == PRE_LAUNCHED_VM) {
 			ept_del_mr(vm, pml4_page, vm_config->memory.start_hpa, vm_config->memory.size);
+		}
+
+		for (i = 0U; i < MAX_MMIO_DEV_NUM; i++) {
+			(void)deassign_mmio_dev(vm, &vm_config->mmiodevs[i]);
 		}
 	}
 
