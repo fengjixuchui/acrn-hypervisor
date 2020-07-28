@@ -341,9 +341,18 @@ def gen_pre_launch_vm(vm_type, vm_i, scenario_items, config):
         return err_dic
 
     if vm_info.cfg_pci.pci_devs[vm_i] and vm_info.cfg_pci.pci_devs[vm_i] != None:
-        print("\t\t.pci_dev_num = {}U,".format(vm_info.cfg_pci.pci_dev_num[vm_i]), file=config)
+        print("\t\t.pci_dev_num = VM{}_CONFIG_PCI_DEV_NUM,".format(vm_i), file=config)
         print("\t\t.pci_devs = vm{}_pci_devs,".format(vm_i), file=config)
 
+    if vm_i == 0 and board_cfg_lib.is_tpm_passthru():
+        print("#ifdef VM0_PASSTHROUGH_TPM", file=config)
+        print("\t\t.pt_tpm2 = true,", file=config)
+        print("\t\t.mmiodevs[0] = {", file=config)
+        print("\t\t\t.base_gpa = 0xFED40000UL,", file=config)
+        print("\t\t\t.base_hpa = VM0_TPM_BUFFER_BASE_ADDR,", file=config)
+        print("\t\t\t.size = VM0_TPM_BUFFER_SIZE,", file=config)
+        print("\t\t},", file=config)
+        print("#endif", file=config)
     print("\t},", file=config)
 
 
@@ -370,7 +379,7 @@ def pre_launch_definiation(vm_info, config):
         if "PRE_LAUNCHED_VM" != scenario_cfg_lib.VM_DB[vm_type]['load_type']:
             continue
         print("extern struct acrn_vm_pci_dev_config " +
-              "vm{}_pci_devs[{}];".format(vm_i, vm_info.cfg_pci.pci_dev_num[vm_i]), file=config)
+              "vm{}_pci_devs[VM{}_CONFIG_PCI_DEV_NUM];".format(vm_i, vm_i), file=config)
     print("", file=config)
 
 def generate_file(scenario_items, config):
