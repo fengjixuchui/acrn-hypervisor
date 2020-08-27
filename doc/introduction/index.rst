@@ -37,7 +37,7 @@ ACRN High-Level Architecture
 
 The ACRN architecture has evolved since its initial v0.1 release in
 July 2018. Beginning with the v1.1 release, the ACRN architecture has
-flexibility to support partition mode, sharing mode, and a mixed hybrid
+flexibility to support *logical partitioning*, *sharing*, and a *hybrid*
 mode. As shown in :numref:`V2-hl-arch`, hardware resources can be
 partitioned into two parts:
 
@@ -67,7 +67,7 @@ VM. The service VM can access hardware resources directly by running
 native drivers and it provides device sharing services to the user VMs
 through the Device Model.  Currently, the service VM is based on Linux,
 but it can also use other operating systems as long as the ACRN Device
-Model is ported into it. A user VM can be Clear Linux*, Ubuntu*, Android*,
+Model is ported into it. A user VM can be Ubuntu*, Android*,
 Windows* or VxWorks*.  There is one special user VM, called a
 post-launched Real-Time VM (RTVM), designed to run a hard real-time OS,
 such as Zephyr*, VxWorks*, or Xenomai*. Because of its real-time capability, RTVM
@@ -87,6 +87,78 @@ platform to run both safety-critical applications and non-safety
 applications, together with security functions that safeguard the
 system.
 
+There are a number of pre-defined scenarios included in ACRN's source code. They
+all build upon the three fundamental modes of operation that have been explained
+above, i.e. the *logical partitioning*, *sharing*, and *hybrid* modes. They
+further specify the number of VMs that can be run, their attributes and the
+resources they have access to, either shared with other VMs or exclusively.
+
+The predefined scenarios are in the `misc/vm_configs/scenarios
+<https://github.com/projectacrn/acrn-hypervisor/tree/master/misc/vm_configs/scenarios>`_
+folder in the source code. XML examples for some platforms can also be found under
+`misc/vm_configs/xmls/config-xmls <https://github.com/projectacrn/acrn-hypervisor/tree/master/misc/vm_configs/xmls/config-xmls/>`_.
+
+The :ref:`acrn_configuration_tool` tutorial explains how to use the ACRN
+Configuration tool to create your own scenario or modify an existing one.
+
+Industrial Workload Consolidation
+=================================
+
+.. figure:: images/ACRN-V2-industrial-scenario.png
+   :width: 600px
+   :align: center
+   :name: V2-industrial-scenario
+
+   ACRN Industrial Workload Consolidation scenario
+
+Supporting Workload consolidation for industrial applications is even
+more challenging. The ACRN hypervisor needs to run different workloads with no
+interference, increase security functions that safeguard the system, run hard
+real-time sensitive workloads together with general computing workloads, and
+conduct data analytics for timely actions and predictive maintenance.
+
+Virtualization is especially important in industrial environments
+because of device and application longevity. Virtualization enables
+factories to modernize their control system hardware by using VMs to run
+older control systems and operating systems far beyond their intended
+retirement dates.
+
+As shown in :numref:`V2-industrial-scenario`, the Service VM can start a number
+of post-launched User VMs and can provide device sharing capabilities to these.
+In total, up to 7 post-launched User VMs can be started:
+
+- 5 regular User VMs,
+- One `Kata Containers <https://katacontainers.io>`_ User VM (see
+  :ref:`run-kata-containers` for more details), and
+- One Real-Time VM (RTVM).
+
+In this example, one post-launched User VM provides Human Machine Interface
+(HMI) capability, another provides Artificial Intelligence (AI) capability, some
+compute function is run the Kata Container and the RTVM runs the soft
+Programmable Logic Controller (PLC) that requires hard real-time
+characteristics.
+
+:numref:`V2-industrial-scenario` shows ACRN's block diagram for an
+Industrial usage scenario:
+
+- ACRN boots from the SoC platform, and supports firmware such as the
+  UEFI BIOS.
+- The ACRN hypervisor can create VMs that run different OSes:
+
+  - a Service VM such as Ubuntu*,
+  - a Human Machine Interface (HMI) application OS such as Windows*,
+  - an Artificial Intelligence (AI) application on Linux*,
+  - a Kata Container application, and
+  - a real-time control OS such as Zephyr*, VxWorks* or RT-Linux*.
+
+- The Service VM, provides device sharing functionalities, such as
+  disk and network mediation, to other virtual machines.
+  It can also run an orchestration agent allowing User VM orchestration
+  with tools such as Kubernetes*.
+- The HMI Application OS can be Windows* or Linux*. Windows is dominant
+  in Industrial HMI environments.
+- ACRN can support a soft Real-time OS such as preempt-rt Linux for
+  soft-PLC control, or a hard Real-time OS that offers less jitter.
 
 Automotive Application Scenarios
 ================================
@@ -154,65 +226,6 @@ A block diagram of ACRN's SDC usage scenario is shown in
 - Multiple operating systems are supported by one SoC through efficient
   virtualization.
 
-Industrial Workload Consolidation
-=================================
-
-.. figure:: images/ACRN-V2-industrial-scenario.png
-   :width: 600px
-   :align: center
-   :name: V2-industrial-scenario
-
-   ACRN Industrial Workload Consolidation scenario
-
-Supporting Workload consolidation for industrial applications is even
-more challenging. The ACRN hypervisor needs to run different workloads with no
-interference, increase security functions that safeguard the system, run hard
-real-time sensitive workloads together with general computing workloads, and
-conduct data analytics for timely actions and predictive maintenance.
-
-Virtualization is especially important in industrial environments
-because of device and application longevity. Virtualization enables
-factories to modernize their control system hardware by using VMs to run
-older control systems and operating systems far beyond their intended
-retirement dates.
-
-As shown in :numref:`V2-industrial-scenario`, the Service VM can start a number
-of post-launched User VMs and can provide device sharing capabilities to these.
-In total, up to 7 post-launched User VMs can be started:
-
-- 5 regular User VMs,
-- One `Kata Containers <https://katacontainers.io>`_ User VM (see
-  :ref:`run-kata-containers` for more details), and
-- One Real-Time VM (RTVM).
-
-In this example, one post-launched User VM provides Human Machine Interface
-(HMI) capability, another provides Artificial Intelligence (AI) capability, some
-compute function is run the Kata Container and the RTVM runs the soft
-Programmable Logic Controller (PLC) that requires hard real-time
-characteristics.
-
-:numref:`V2-industrial-scenario` shows ACRN's block diagram for an
-Industrial usage scenario:
-
-- ACRN boots from the SoC platform, and supports firmware such as the
-  UEFI BIOS.
-- The ACRN hypervisor can create VMs that run different OSes:
-
-  - a Service VM such as Ubuntu*,
-  - a Human Machine Interface (HMI) application OS such as Windows*,
-  - an Artificial Intelligence (AI) application on Linux*,
-  - a Kata Container application, and
-  - a real-time control OS such as Zephyr*, VxWorks* or RT-Linux*.
-
-- The Service VM, provides device sharing functionalities, such as
-  disk and network mediation, to other virtual machines.
-  It can also run an orchestration agent allowing User VM orchestration
-  with tools such as Kubernetes*.
-- The HMI Application OS can be Windows* or Linux*. Windows is dominant
-  in Industrial HMI environments.
-- ACRN can support a soft Real-time OS such as preempt-rt Linux for
-  soft-PLC control, or a hard Real-time OS that offers less jitter.
-
 Best Known Configurations
 *************************
 
@@ -248,6 +261,13 @@ application scenario needs.
    * - Hybrid Usage Config
      - Hybrid
      - Pre-launched VM (Safety VM)
+     - Service VM
+     - Post-launched VM
+     -
+
+   * - Hybrid Real-Time Usage Config
+     - Hybrid RT
+     - Pre-launched VM (Real-Time VM)
      - Service VM
      - Post-launched VM
      -
@@ -306,6 +326,20 @@ non-real-time tasks.
 
    Hybrid scenario
 
+Hybrid Real-Time (RT) scenario
+==============================
+
+In this Hybrid Real-Time (RT) scenario, a pre-launched RTVM is started by the
+hypervisor. The Service VM runs a post-launched User VM that runs non-safety or
+non-real-time tasks.
+
+.. figure:: images/ACRN-Hybrid-RT.png
+   :width: 600px
+   :align: center
+   :name: ACRN-Hybrid-RT
+
+   Hybrid RT scenario
+
 Logical Partition scenario
 ==========================
 
@@ -360,71 +394,21 @@ and many other features.
 Boot Sequence
 *************
 
-.. _systemd-boot: https://www.freedesktop.org/software/systemd/man/systemd-boot.html
 .. _grub: https://www.gnu.org/software/grub/manual/grub/
 .. _Slim Bootloader: https://www.intel.com/content/www/us/en/design/products-and-solutions/technologies/slim-bootloader/overview.html
 
-ACRN supports two kinds of boots: **De-privilege boot mode** and **Direct
-boot mode**.
-
-De-privilege boot mode
-======================
-
-**De-privilege boot mode** is loaded by ``acrn.efi`` under a UEFI
-environment. The Service VM must be the first launched VM, (i.e. VM0).
-
-In :numref:`boot-flow`, we show a verified Boot Sequence with UEFI
-on an Intel Architecture platform NUC (see :ref:`hardware`).
-
-.. graphviz:: images/boot-flow.dot
-   :name: boot-flow
-   :align: center
-   :caption: ACRN Hypervisor De-privilege boot mode Flow
-
-The Boot process proceeds as follows:
-
-#. UEFI verifies and boots the ACRN hypervisor and Service VM Bootloader.
-#. UEFI (or Service VM Bootloader) verifies and boots the Service VM kernel.
-#. The Service VM kernel verifies and loads the ACRN Device Model and the Virtual
-   bootloader through ``dm-verity``.
-#. The virtual bootloader starts the User-side verified boot process.
-
-.. note::
-   To avoid a hardware resources conflict with the ACRN hypervisor, UEFI
-   services shall not use IOMMU. In addition, we only currently support the
-   UEFI timer with the HPET MSI.
-
-In this boot mode, both the Service and User VM boot options (e.g. Linux
-command-line parameters) are configured following the instructions for the EFI
-bootloader used by the Operating System (OS).
-
-* In the case of Clear Linux, the EFI bootloader is `systemd-boot`_ and the Linux
-  kernel command-line parameters are defined in the ``.conf`` files.
-
-.. note::
-
-   A virtual `Slim Bootloader`_ called ``vSBL``, can also be used to start User VMs. The
-   :ref:`acrn-dm_parameters` provides more information on how to boot a
-   User VM using ``vSBL``. Note that in this case, the kernel command-line
-   parameters are defined by the combination of the ``cmdline.txt`` passed
-   on to the ``iasimage`` script and in the launch script, via the ``-B``
-   option.
-
-Direct boot mode
-================
-
 The ACRN hypervisor can be booted from a third-party bootloader
-directly, called **Direct boot mode**. A popular bootloader is `grub`_ and is
+directly. A popular bootloader is `grub`_ and is
 also widely used by Linux distributions.
 
 :ref:`using_grub` has a introduction on how to boot ACRN hypervisor with GRUB.
 
-In :numref:`boot-flow-2`, we show the **Direct boot mode** sequence:
+In :numref:`boot-flow-2`, we show the boot sequence:
 
 .. graphviz:: images/boot-flow-2.dot
   :name: boot-flow-2
   :align: center
-  :caption: ACRN Hypervisor Direct boot mode Boot Flow
+  :caption: ACRN Hypervisor Boot Flow
 
 The Boot process proceeds as follows:
 
@@ -448,7 +432,7 @@ launch scripts.
 .. note::
 
    `Slim Bootloader`_ is an alternative boot firmware that can be used to
-   boot ACRN in **Direct boot mode**. The `Boot ACRN Hypervisor
+   boot ACRN. The `Boot ACRN Hypervisor
    <https://slimbootloader.github.io/how-tos/boot-acrn.html>`_ tutorial
    provides more information on how to use SBL with ACRN.
 
