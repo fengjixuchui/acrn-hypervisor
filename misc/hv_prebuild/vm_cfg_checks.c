@@ -76,10 +76,11 @@ static bool check_vm_uuid_collision(uint16_t vm_id)
 	return ret;
 }
 
+#ifdef CONFIG_RDT_ENABLED
 static bool check_vm_clos_config(uint16_t vm_id)
 {
 	uint16_t i;
-	uint16_t platform_clos_num = MAX_PLATFORM_CLOS_NUM;
+	uint16_t platform_clos_num = HV_SUPPORTED_MAX_CLOS;
 	bool ret = true;
 	struct acrn_vm_config *vm_config = get_vm_config(vm_id);
 	uint16_t vcpu_num = bitmap_weight(vm_config->cpu_affinity);
@@ -95,6 +96,7 @@ static bool check_vm_clos_config(uint16_t vm_id)
 	}
 	return ret;
 }
+#endif
 
 /**
  * @pre vm_config != NULL
@@ -157,9 +159,11 @@ bool sanitize_vm_config(void)
 			}
 		}
 
+#ifdef CONFIG_RDT_ENABLED
 		if (ret) {
 			ret = check_vm_clos_config(vm_id);
 		}
+#endif
 
 		if (ret &&
 		    (((vm_config->epc.size | vm_config->epc.base) & ~PAGE_MASK) != 0UL)) {
