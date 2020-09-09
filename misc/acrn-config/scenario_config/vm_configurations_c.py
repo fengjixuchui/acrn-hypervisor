@@ -337,6 +337,9 @@ def gen_pre_launch_vm(vm_type, vm_i, scenario_items, config):
         print("\t\t\t.bootargs = ", end="", file=config)
         split_cmdline(vm_info.os_cfg.kern_args[vm_i].strip(), config)
     print("\t\t},", file=config)
+    print("\t\t.acpi_config = {", file=config)
+    print('\t\t\t.acpi_mod_tag = "ACPI_VM{}",'.format(vm_i), file=config)
+    print("\t\t},", file=config)
     # VUART
     err_dic = vuart_output(vm_type, vm_i, vm_info, config)
     if err_dic:
@@ -357,6 +360,25 @@ def gen_pre_launch_vm(vm_type, vm_i, scenario_items, config):
         print("\t\t\t.size = VM0_TPM_BUFFER_SIZE,", file=config)
         print("\t\t},", file=config)
         print("#endif", file=config)
+
+    if (vm_i == 0 and vm_info.mmio_resource_info.p2sb.get(vm_i) is not None
+        and vm_info.mmio_resource_info.p2sb[vm_i]):
+        print("#ifdef P2SB_BAR_ADDR", file=config)
+        print("\t\t.pt_p2sb_bar = true,", file=config)
+        print("\t\t.mmiodevs[0] = {", file=config)
+        gpa = common.hpa2gpa(0, board_cfg_lib.find_p2sb_bar_addr(), 0x1000000)
+        print("\t\t\t.base_gpa = 0x{:X}UL,".format(gpa), file=config)
+        print("\t\t\t.base_hpa = P2SB_BAR_ADDR,", file=config)
+        print("\t\t\t.size = 0x1000000UL,", file=config)
+        print("\t\t},", file=config)
+        print("#endif", file=config)
+
+    if (vm_i == 0 and board_cfg_lib.is_matched_board(("ehl-crb-b"))
+        and vm_info.pt_intx_info.phys_gsi.get(vm_i) is not None
+        and len(vm_info.pt_intx_info.phys_gsi[vm_i]) > 0):
+        print("\t\t.pt_intx_num = {}U,".format(len(vm_info.pt_intx_info.phys_gsi[vm_i])), file=config)
+        print("\t\t.pt_intx = &vm0_pt_intx[0U],", file=config)
+
     print("\t},", file=config)
 
 
@@ -382,7 +404,7 @@ def gen_post_launch_vm(vm_type, vm_i, scenario_items, config):
     print("\t},", file=config)
 
 
-def pre_launch_definiation(vm_info, config):
+def pre_launch_definition(vm_info, config):
 
     for vm_i,vm_type in common.VM_TYPES.items():
         if scenario_cfg_lib.VM_DB[vm_type]['load_type'] not in ["PRE_LAUNCHED_VM", "POST_LAUNCHED_VM"]:
@@ -404,8 +426,22 @@ def generate_file(scenario_items, config):
     gen_source_header(config)
     for vm_i,pci_dev_num in vm_info.cfg_pci.pci_dev_num.items():
         if pci_dev_num >= 2:
-            pre_launch_definiation(vm_info, config)
+            pre_launch_definition(vm_info, config)
             break
+
+    if (board_cfg_lib.is_matched_board(("ehl-crb-b"))
+        and vm_info.pt_intx_info.phys_gsi.get(0) is not None
+        and len(vm_info.pt_intx_info.phys_gsi[0]) > 0):
+
+        print("static struct pt_intx_config vm0_pt_intx[{}U] = {{".format(len(vm_info.pt_intx_info.phys_gsi[0])), file=config)
+        for i, (p_pin, v_pin) in enumerate(zip(vm_info.pt_intx_info.phys_gsi[0], vm_info.pt_intx_info.virt_gsi[0])):
+            print("\t[{}U] = {{".format(i), file=config)
+            print("\t\t.phys_gsi = {}U,".format(p_pin), file=config)
+            print("\t\t.virt_gsi = {}U,".format(v_pin), file=config)
+            print("\t},", file=config)
+
+        print("};", file=config)
+        print("", file=config)
 
     print("struct acrn_vm_config vm_configs[CONFIG_MAX_VM_NUM] = {", file=config)
     for vm_i, vm_type in common.VM_TYPES.items():

@@ -529,6 +529,7 @@ def cpus_assignment(cpus_per_vm, index):
                     if load_type == "PRE_LAUNCHED_VM":
                         pre_all_cpus += cpu_list
             cpus_per_vm[index] = list(set(sos_extend_all_cpus) - set(pre_all_cpus))
+            cpus_per_vm[index].sort()
 
     for i in range(len(cpus_per_vm[index])):
         if i == 0:
@@ -711,7 +712,7 @@ def share_mem_check(shmem_regions, raw_shmem_regions, vm_type_info, prime_item, 
                             break
                 except:
                     index = 0
-            key = "hv,{},{},{}".format(prime_item, item, sub_item, index)
+            key = "hv,{},{},{},{}".format(prime_item, item, sub_item, index)
 
             shm_str_splited = shm_str.split(',')
             if len(shm_str_splited) < 3:
@@ -721,7 +722,7 @@ def share_mem_check(shmem_regions, raw_shmem_regions, vm_type_info, prime_item, 
             try:
                 curr_vm_id = int(shm_i)
             except:
-                ERR_LIST[key] = "share memory region should be configure with format like this: VM0_VM2,0x20000,0:2"
+                ERR_LIST[key] = "share memory region should be configured with format like this: hv:/shm_region_0, 0x200000, 0:2"
                 return
             name = shm_str_splited[0].strip()
             size = shm_str_splited[1].strip()
@@ -763,10 +764,10 @@ def share_mem_check(shmem_regions, raw_shmem_regions, vm_type_info, prime_item, 
             except:
                 ERR_LIST[key] = "The size of share Memory region should be decimal or hexadecimal."
                 return
-            if int_size < 0x200000 or int_size > 0x40000000:
-                ERR_LIST[key] = "The size of share Memory region should be in [2M, 1G]."
+            if int_size < 0x200000 or int_size > 0x20000000:
+                ERR_LIST[key] = "The size of share Memory region should be in [2MB, 512MB]."
                 return
-            if not math.log(int_size, 2).is_integer():
+            if not ((int_size & (int_size-1) == 0) and int_size != 0):
                 ERR_LIST[key] = "The size of share Memory region should be a power of 2."
                 return
 
@@ -791,10 +792,70 @@ def share_mem_check(shmem_regions, raw_shmem_regions, vm_type_info, prime_item, 
                         break
             except:
                 index = 0
-            key = "hv,{},{},{}".format(prime_item, item, sub_item, index)
+            key = "hv,{},{},{},{}".format(prime_item, item, sub_item, index)
             if 'IVSHMEM_'+name in board_cfg_lib.PCI_DEV_BAR_DESC.shm_bar_dic.keys():
                 bar_attr_dic = board_cfg_lib.PCI_DEV_BAR_DESC.shm_bar_dic['IVSHMEM_'+name]
                 if (0 in bar_attr_dic.keys() and int(bar_attr_dic[0].addr, 16) < 0x80000000) \
                     or (2 in bar_attr_dic.keys() and int(bar_attr_dic[2].addr, 16) < 0x100000000):
                     ERR_LIST[key] = "Failed to get the start address of the shared memory, please check the size of it."
                     return
+
+
+def check_p2sb(enable_p2sb):
+
+    for vm_i,p2sb in enable_p2sb.items():
+        if vm_i != 0:
+            key = "vm:id={},p2sb".format(vm_i)
+            ERR_LIST[key] = "Can only specify p2sb passthru for VM0"
+            return
+
+        if p2sb and not VM_DB[common.VM_TYPES[0]]['load_type'] == "PRE_LAUNCHED_VM":
+            ERR_LIST["vm:id=0,p2sb"] = "p2sb passthru can only be enabled for Pre-launched VM"
+            return
+
+        if p2sb and not board_cfg_lib.is_p2sb_passthru_possible():
+            ERR_LIST["vm:id=0,p2sb"] = "p2sb passthru is not allowed for this board"
+            return
+
+        if p2sb and board_cfg_lib.is_tpm_passthru():
+            ERR_LIST["vm:id=0,p2sb"] = "Cannot enable p2sb and tpm passthru at the same time"
+            return
+
+
+def check_pt_intx(phys_gsi, virt_gsi):
+
+    if not phys_gsi and not virt_gsi:
+        return
+
+    if not board_cfg_lib.is_matched_board(('ehl-crb-b')):
+        ERR_LIST["pt_intx"] = "only board ehl-crb-b is supported"
+        return
+
+    if not VM_DB[common.VM_TYPES[0]]['load_type'] == "PRE_LAUNCHED_VM":
+       ERR_LIST["pt_intx"] = "pt_intx can only be specified for pre-launched VM"
+       return
+
+    for (id1,p), (id2,v) in zip(phys_gsi.items(), virt_gsi.items()):
+        if id1 != 0 or id2 != 0:
+            ERR_LIST["pt_intx"] = "virt_gsi and phys_gsi can only be specified for VM0"
+            return
+
+        if len(p) != len(v):
+            ERR_LIST["vm:id=0,pt_intx"] = "virt_gsi and phys_gsi must have same length"
+            return
+
+        if len(p) != len(set(p)):
+            ERR_LIST["vm:id=0,pt_intx"] = "phys_gsi contains duplicates"
+            return
+
+        if len(v) != len(set(v)):
+            ERR_LIST["vm:id=0,pt_intx"] = "virt_gsi contains duplicates"
+            return
+
+        if len(p) > 120:
+            ERR_LIST["vm:id=0,pt_intx"] = "# of phys_gsi and virt_gsi pairs must not be greater than 120"
+            return
+
+        if not all(pin < 120 for pin in v):
+            ERR_LIST["vm:id=0,pt_intx"] = "virt_gsi must be less than 120"
+            return

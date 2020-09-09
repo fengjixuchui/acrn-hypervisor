@@ -140,6 +140,10 @@ struct acrn_vm_os_config {
 	uint64_t kernel_ramdisk_addr;
 } __aligned(8);
 
+struct acrn_vm_acpi_config {
+	char acpi_mod_tag[MAX_MOD_TAG_LEN];		/* multiboot module tag for ACPI */
+} __aligned(8);
+
 /* the vbdf is assgined by device model */
 #define UNASSIGNED_VBDF        0xFFFFU
 
@@ -151,6 +155,11 @@ struct acrn_vm_pci_dev_config {
 	uint64_t vbar_base[PCI_BAR_COUNT];		/* vbar base address of PCI device, which is power-on default value */
 	struct pci_pdev *pdev;				/* the physical PCI device if it's a PT device */
 	const struct pci_vdev_ops *vdev_ops;		/* operations for PCI CFG read/write */
+} __aligned(8);
+
+struct pt_intx_config {
+	uint32_t phys_gsi;	/* physical IOAPIC gsi to be forwarded to the VM */
+	uint32_t virt_gsi;	/* virtual IOAPIC gsi triggered on the vIOAPIC */
 } __aligned(8);
 
 struct acrn_vm_config {
@@ -175,9 +184,10 @@ struct acrn_vm_config {
 	uint16_t pci_dev_num;				/* indicate how many PCI devices in VM */
 	struct acrn_vm_pci_dev_config *pci_devs;	/* point to PCI devices BDF list */
 	struct acrn_vm_os_config os_config;		/* OS information the VM */
+	struct acrn_vm_acpi_config acpi_config;		/* ACPI config for the VM */
 
 	/*
-	 * below are varaible length members (per build).
+	 * below are variable length members (per build).
 	 * SOS can get the vm_configs[] array through hypercall, but SOS may not
 	 * need to parse these members.
 	 */
@@ -189,6 +199,11 @@ struct acrn_vm_config {
 
 	bool pt_tpm2;
 	struct acrn_mmiodev mmiodevs[MAX_MMIO_DEV_NUM];
+
+	bool pt_p2sb_bar; /* whether to passthru p2sb bridge to pre-launched VM or not */
+
+	uint16_t pt_intx_num; /* number of pt_intx_config entries pointed by pt_intx */
+	struct pt_intx_config *pt_intx; /* stores the base address of struct pt_intx_config array */
 } __aligned(8);
 
 struct acrn_vm_config *get_vm_config(uint16_t vm_id);

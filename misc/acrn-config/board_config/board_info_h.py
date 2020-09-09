@@ -5,6 +5,7 @@
 
 import common
 import board_cfg_lib
+import scenario_cfg_lib
 
 BOARD_INFO_DEFINE="""#ifndef BOARD_INFO_H
 #define BOARD_INFO_H
@@ -18,7 +19,7 @@ def gen_known_caps_pci_head(config):
     bdf_list_len = 0
     known_caps_pci_devs = board_cfg_lib.get_known_caps_pci_devs()
     for dev,bdf_list in known_caps_pci_devs.items():
-        if dev == "TSN":
+        if dev == "VMSIX":
             bdf_list_len = len(bdf_list)
     print("#define MAX_VMSIX_ON_MSI_PDEVS_NUM\t{}U".format(bdf_list_len), file=config)
 
@@ -89,5 +90,17 @@ def generate_file(config):
 
     # generate HI_MMIO_START/HI_MMIO_END
     find_hi_mmio_window(config)
+
+    if (common.VM_TYPES.get(0) is not None and
+        scenario_cfg_lib.VM_DB[common.VM_TYPES[0]]['load_type'] == "PRE_LAUNCHED_VM"
+        and board_cfg_lib.is_p2sb_passthru_possible()):
+        print("", file=config)
+        print("#define P2SB_VGPIO_DM_ENABLED", file=config)
+        print("#define P2SB_BAR_ADDR\t\t\t0x{:X}UL".format(board_cfg_lib.find_p2sb_bar_addr()), file=config)
+
+    if board_cfg_lib.is_matched_board(("ehl-crb-b")):
+        print("", file=config)
+        print("#define P2SB_BASE_GPIO_PORT_ID\t\t0x69U", file=config)
+        print("#define P2SB_MAX_GPIO_COMMUNITIES\t0x6U", file=config)
 
     print(BOARD_INFO_ENDIF, file=config)

@@ -174,7 +174,7 @@ static int32_t vpci_mmio_cfg_access(struct io_request *io_req, void *private_dat
 	int32_t ret = 0;
 	struct mmio_request *mmio = &io_req->reqs.mmio;
 	struct acrn_vpci *vpci = (struct acrn_vpci *)private_data;
-	uint64_t pci_mmcofg_base = vpci->pci_mmcfg_base;
+	uint64_t pci_mmcofg_base = vpci->pci_mmcfg.address;
 	uint64_t address = mmio->address;
 	uint32_t reg_num = (uint32_t)(address & 0xfffUL);
 	union pci_bdf bdf;
@@ -191,19 +191,9 @@ static int32_t vpci_mmio_cfg_access(struct io_request *io_req, void *private_dat
 	bdf.value = (uint16_t)((address - pci_mmcofg_base) >> 12U);
 
 	if (mmio->direction == REQUEST_READ) {
-		if (!is_plat_hidden_pdev(bdf)) {
-			ret = vpci_read_cfg(vpci, bdf, reg_num, (uint32_t)mmio->size, (uint32_t *)&mmio->value);
-		} else {
-			/* expose and pass through platform hidden devices to SOS */
-			mmio->value = (uint64_t)pci_pdev_read_cfg(bdf, reg_num, (uint32_t)mmio->size);
-		}
+		ret = vpci_read_cfg(vpci, bdf, reg_num, (uint32_t)mmio->size, (uint32_t *)&mmio->value);
 	} else {
-		if (!is_plat_hidden_pdev(bdf)) {
-			ret = vpci_write_cfg(vpci, bdf, reg_num, (uint32_t)mmio->size, (uint32_t)mmio->value);
-		} else {
-			/* expose and pass through platform hidden devices to SOS */
-			pci_pdev_write_cfg(bdf, reg_num, (uint32_t)mmio->size, (uint32_t)mmio->value);
-		}
+		ret = vpci_write_cfg(vpci, bdf, reg_num, (uint32_t)mmio->size, (uint32_t)mmio->value);
 	}
 
 	return ret;
@@ -226,7 +216,7 @@ void init_vpci(struct acrn_vm *vm)
 	};
 
 	struct acrn_vm_config *vm_config;
-	uint64_t pci_mmcfg_base;
+	struct pci_mmcfg_region *pci_mmcfg;
 
 	vm->iommu = create_iommu_domain(vm->vm_id, hva2hpa(vm->arch_vm.nworld_eptp), 48U);
 	/* Build up vdev list for vm */
@@ -234,10 +224,17 @@ void init_vpci(struct acrn_vm *vm)
 
 	vm_config = get_vm_config(vm->vm_id);
 	/* virtual PCI MMCONFIG for SOS is same with the physical value */
-	pci_mmcfg_base = (vm_config->load_order == SOS_VM) ? get_mmcfg_base() : VIRT_PCI_MMCFG_BASE;
-	vm->vpci.pci_mmcfg_base = pci_mmcfg_base;
-	register_mmio_emulation_handler(vm, vpci_mmio_cfg_access,
-			pci_mmcfg_base, pci_mmcfg_base + PCI_MMCONFIG_SIZE, &vm->vpci, false);
+	if (vm_config->load_order == SOS_VM) {
+		pci_mmcfg = get_mmcfg_region();
+		vm->vpci.pci_mmcfg = *pci_mmcfg;
+	} else {
+		vm->vpci.pci_mmcfg.address = UOS_VIRT_PCI_MMCFG_BASE;
+		vm->vpci.pci_mmcfg.start_bus = UOS_VIRT_PCI_MMCFG_START_BUS;
+		vm->vpci.pci_mmcfg.end_bus = UOS_VIRT_PCI_MMCFG_END_BUS;
+	}
+
+	register_mmio_emulation_handler(vm, vpci_mmio_cfg_access, vm->vpci.pci_mmcfg.address,
+		vm->vpci.pci_mmcfg.address + get_pci_mmcfg_size(&vm->vpci.pci_mmcfg), &vm->vpci, false);
 
 	/* Intercept and handle I/O ports CF8h */
 	register_pio_emulation_handler(vm, PCI_CFGADDR_PIO_IDX, &pci_cfgaddr_range,
@@ -557,6 +554,11 @@ static int32_t vpci_read_cfg(struct acrn_vpci *vpci, union pci_bdf bdf,
 	} else {
 		if (is_postlaunched_vm(vpci2vm(vpci))) {
 			ret = -ENODEV;
+		} else if (is_plat_hidden_pdev(bdf)) {
+			/* expose and pass through platform hidden devices */
+			*val = pci_pdev_read_cfg(bdf, offset, bytes);
+		} else {
+			/* no action: e.g., PCI scan */
 		}
 	}
 	spinlock_release(&vpci->lock);
@@ -577,11 +579,14 @@ static int32_t vpci_write_cfg(struct acrn_vpci *vpci, union pci_bdf bdf,
 	if (vdev != NULL) {
 		ret = vdev->vdev_ops->write_vdev_cfg(vdev, offset, bytes, val);
 	} else {
-		if (!is_postlaunched_vm(vpci2vm(vpci))) {
+		if (is_postlaunched_vm(vpci2vm(vpci))) {
+			ret = -ENODEV;
+		} else if (is_plat_hidden_pdev(bdf)) {
+			/* expose and pass through platform hidden devices */
+			pci_pdev_write_cfg(bdf, offset, bytes, val);
+		} else {
 			pr_acrnlog("%s %x:%x.%x not found! off: 0x%x, val: 0x%x\n", __func__,
 				bdf.bits.b, bdf.bits.d, bdf.bits.f, offset, val);
-		} else {
-			ret = -ENODEV;
 		}
 	}
 	spinlock_release(&vpci->lock);

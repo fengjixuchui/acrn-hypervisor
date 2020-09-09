@@ -27,6 +27,10 @@
         <ACPI_PARSE_ENABLED desc="Enable ACPI runtime parsing.">y</ACPI_PARSE_ENABLED>
         <L1D_VMENTRY_ENABLED desc="Enable L1 cache flush before VM entry.">n</L1D_VMENTRY_ENABLED>
         <MCE_ON_PSC_DISABLED desc="Force to disable software workaround for Machine Check Error on Page Size Change.">n</MCE_ON_PSC_DISABLED>
+        <IVSHMEM desc="IVSHMEM configuration">
+            <IVSHMEM_ENABLED desc="Enable Share Memory between VMs by IVSHMEM.">n</IVSHMEM_ENABLED>
+            <IVSHMEM_REGION desc="the name, size, colon separated IDs of communication VMs of share memory region, separated by comma like this: hv:/shm_region_0, 0x200000, 0:2"></IVSHMEM_REGION>
+        </IVSHMEM>
     </FEATURES>
 
     <MEMORY>
@@ -84,8 +88,8 @@
         <kern_mod desc="The tag for kernel image which act as multiboot module, it must exactly match the module tag in GRUB multiboot cmdline.">Zephyr_RawImage</kern_mod>
         <ramdisk_mod desc="The tag for ramdisk image which act as multiboot module, it must exactly match the module tag in GRUB multiboot cmdline."></ramdisk_mod>
         <bootargs desc="Specify kernel boot arguments"></bootargs>
-        <kern_load_addr desc="The loading address in host memory for the VM kernel">0x100000</kern_load_addr>
-        <kern_entry_addr desc="The entry address in host memory for the VM kernel">0x100000</kern_entry_addr>
+        <kern_load_addr desc="The loading address in host memory for the VM kernel">0x8000</kern_load_addr>
+        <kern_entry_addr desc="The entry address in host memory for the VM kernel">0x8000</kern_entry_addr>
     </os_config>
     <vuart id="0">
         <type configurable="0" desc="vCOM1 type">VUART_LEGACY_PIO</type>
@@ -102,6 +106,9 @@
     <pci_devs desc="pci devices list">
         <pci_dev desc="pci device"></pci_dev>
     </pci_devs>
+    <mmio_resources desc="mmio devices list to passthrough">
+        <TPM2 desc="TPM2 device">n</TPM2>
+    </mmio_resources>
   </vm>
   <vm id="1">
     <vm_type desc="Specify the VM type" readonly="true">SOS_VM</vm_type>

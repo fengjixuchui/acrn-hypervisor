@@ -33,6 +33,8 @@
 #include <vacpi.h>
 #include <platform_caps.h>
 #include <mmio_dev.h>
+#include <assign.h>
+#include <vgpio.h>
 
 vm_sw_loader_t vm_sw_loader;
 
@@ -231,26 +233,23 @@ static void prepare_prelaunched_vm_memmap(struct acrn_vm *vm, const struct acrn_
 			break;
 		}
 
-		/* Do EPT mapping for GPAs that are backed by physical memory */
-		if ((entry->type == E820_TYPE_RAM) && (remaining_hpa_size >= entry->length)) {
-			ept_add_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp, base_hpa, entry->baseaddr,
-				entry->length, EPT_RWX | EPT_WB);
+		if (remaining_hpa_size >= entry->length) {
+			/* Do EPT mapping for GPAs that are backed by physical memory */
+			if ((entry->type == E820_TYPE_RAM) || (entry->type == E820_TYPE_ACPI_RECLAIM)
+					|| (entry->type == E820_TYPE_ACPI_NVS)) {
+				ept_add_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp, base_hpa, entry->baseaddr,
+					entry->length, EPT_RWX | EPT_WB);
+			}
 
+			/* GPAs under 1MB are always backed by physical memory */
+			if ((entry->type != E820_TYPE_RAM) && (entry->baseaddr < (uint64_t)MEM_1M)) {
+				ept_add_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp, base_hpa, entry->baseaddr,
+					entry->length, EPT_RWX | EPT_UNCACHED);
+			}
 			base_hpa += entry->length;
 			remaining_hpa_size -= entry->length;
-		} else if ((entry->type == E820_TYPE_RAM) && (remaining_hpa_size < entry->length)) {
-                         pr_warn("%s: HPA size incorrectly configured in v820\n", __func__);
-		}
-
-
-		/* GPAs under 1MB are always backed by physical memory */
-		if ((entry->type != E820_TYPE_RAM) && (entry->baseaddr < (uint64_t)MEM_1M) &&
-			(remaining_hpa_size >= entry->length)) {
-			ept_add_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp, base_hpa, entry->baseaddr,
-				entry->length, EPT_RWX | EPT_UNCACHED);
-
-			base_hpa += entry->length;
-			remaining_hpa_size -= entry->length;
+		} else if (entry->type == E820_TYPE_RAM) {
+			pr_warn("%s: HPA size incorrectly configured in v820\n", __func__);
 		}
 
 		if ((remaining_hpa_size == 0UL) && (is_hpa1)) {
@@ -262,6 +261,12 @@ static void prepare_prelaunched_vm_memmap(struct acrn_vm *vm, const struct acrn_
 
 	for (i = 0U; i < MAX_MMIO_DEV_NUM; i++) {
 		(void)assign_mmio_dev(vm, &vm_config->mmiodevs[i]);
+
+#ifdef P2SB_VGPIO_DM_ENABLED
+		if ((vm_config->pt_p2sb_bar) && (vm_config->mmiodevs[i].base_hpa == P2SB_BAR_ADDR)) {
+			register_vgpio_handler(vm, &vm_config->mmiodevs[i]);
+		}
+#endif
 	}
 }
 
@@ -287,6 +292,7 @@ static void prepare_sos_vm_memmap(struct acrn_vm *vm)
 	uint32_t entries_count = vm->e820_entry_num;
 	const struct e820_entry *p_e820 = vm->e820_entries;
 	const struct mem_range *p_mem_range_info = get_mem_range_info();
+	struct pci_mmcfg_region *pci_mmcfg;
 
 	pr_dbg("sos_vm: bottom memory - 0x%lx, top memory - 0x%lx\n",
 		p_mem_range_info->mem_bottom, p_mem_range_info->mem_top);
@@ -349,7 +355,8 @@ static void prepare_sos_vm_memmap(struct acrn_vm *vm)
 	ept_del_mr(vm, pml4_page, get_ap_trampoline_buf(), CONFIG_LOW_RAM_SIZE);
 
 	/* unmap PCIe MMCONFIG region since it's owned by hypervisor */
-	ept_del_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp, get_mmcfg_base(), PCI_MMCONFIG_SIZE);
+	pci_mmcfg = get_mmcfg_region();
+	ept_del_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp, pci_mmcfg->address, get_pci_mmcfg_size(pci_mmcfg));
 }
 
 /* Add EPT mapping of EPC reource for the VM */
@@ -519,6 +526,18 @@ int32_t create_vm(uint16_t vm_id, uint64_t pcpu_bitmap, struct acrn_vm_config *v
 		}
 	}
 
+	if (status == 0) {
+		uint32_t i;
+		for (i = 0; i < vm_config->pt_intx_num; i++) {
+			status = ptirq_add_intx_remapping(vm, vm_config->pt_intx[i].virt_gsi,
+								vm_config->pt_intx[i].phys_gsi, false);
+			if (status != 0) {
+				ptirq_remove_configured_intx_remappings(vm);
+				break;
+			}
+		}
+	}
+
 	if ((status != 0) && (vm->arch_vm.nworld_eptp != NULL)) {
 		(void)memset(vm->arch_vm.nworld_eptp, 0U, PAGE_SIZE);
 	}
@@ -603,6 +622,8 @@ int32_t shutdown_vm(struct acrn_vm *vm)
 	if (is_sos_vm(vm)) {
 		sbuf_reset();
 	}
+
+	ptirq_remove_configured_intx_remappings(vm);
 
 	deinit_vuart(vm);
 
@@ -755,7 +776,7 @@ void prepare_vm(uint16_t vm_id, struct acrn_vm_config *vm_config)
 
 	if (err == 0) {
 		if (is_prelaunched_vm(vm)) {
-			build_vacpi(vm);
+			build_vrsdp(vm);
 		}
 
 		(void)vm_sw_loader(vm);

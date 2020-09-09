@@ -23,8 +23,8 @@ struct acrn_vm_config vm_configs[CONFIG_MAX_VM_NUM] = {
 			.name = "Zephyr",
 			.kernel_type = KERNEL_ZEPHYR,
 			.kernel_mod_tag = "Zephyr_RawImage",
-			.kernel_load_addr = 0x100000,
-			.kernel_entry_addr = 0x100000,
+			.kernel_load_addr = 0x8000,
+			.kernel_entry_addr = 0x8000,
 		},
 		.vuart[0] = {
 			.type = VUART_LEGACY_PIO,
@@ -38,6 +38,14 @@ struct acrn_vm_config vm_configs[CONFIG_MAX_VM_NUM] = {
 			.t_vuart.vm_id = 1U,
 			.t_vuart.vuart_id = 1U,
 		},
+#ifdef P2SB_BAR_ADDR
+		.pt_p2sb_bar = true,
+		.mmiodevs[0] = {
+			.base_gpa = 0xFD000000UL,
+			.base_hpa = P2SB_BAR_ADDR,
+			.size = 0x1000000UL,
+		},
+#endif
 	},
 	{	/* VM1 */
 		CONFIG_SOS_VM,

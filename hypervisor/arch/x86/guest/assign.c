@@ -680,7 +680,7 @@ int32_t ptirq_intx_pin_remap(struct acrn_vm *vm, uint32_t virt_gsi, enum intx_ct
 	DEFINE_INTX_SID(alt_virt_sid, virt_gsi, vgsi_ctlr);
 
 	/*
-	 * virt pin could come from vpic master, vpic slave or vioapic
+	 * virt pin could come from primary vPIC, secondary vPIC or vIOAPIC
 	 * while phys pin is always means for physical IOAPIC.
 	 *
 	 * Device Model should pre-hold the mapping entries by calling
@@ -801,5 +801,18 @@ void ptirq_remove_msix_remapping(const struct acrn_vm *vm, uint16_t phys_bdf,
 		spinlock_obtain(&ptdev_lock);
 		remove_msix_remapping(vm, phys_bdf, i);
 		spinlock_release(&ptdev_lock);
+	}
+}
+
+/*
+ * @pre vm != NULL
+ */
+void ptirq_remove_configured_intx_remappings(const struct acrn_vm *vm)
+{
+	const struct acrn_vm_config *vm_config = get_vm_config(vm->vm_id);
+	uint32_t i;
+
+	for (i = 0; i < vm_config->pt_intx_num; i++) {
+		ptirq_remove_intx_remapping(vm, vm_config->pt_intx[i].virt_gsi, false);
 	}
 }

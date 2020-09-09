@@ -77,6 +77,11 @@
         <cpu_affinity desc="List of pCPU that this VM's vCPUs are pinned to.">
             <pcpu_id>3</pcpu_id>
         </cpu_affinity>
+        <mmio_resources desc="MMIO resources.">
+            <p2sb>n</p2sb>
+        </mmio_resources>
+        <pt_intx desc="pt intx mapping.">
+        </pt_intx>
         <clos desc="Class of Service for Cache Allocation Technology. Please refer SDM 17.19.2 for details and use with caution.">
             <vcpu_clos>0</vcpu_clos>
         </clos>
@@ -96,8 +101,8 @@
             <kern_mod desc="The tag for kernel image which act as multiboot module, it must exactly match the module tag in GRUB multiboot cmdline.">Zephyr_RawImage</kern_mod>
             <ramdisk_mod desc="The tag for ramdisk image which act as multiboot module, it must exactly match the module tag in GRUB multiboot cmdline." />
             <bootargs desc="Specify kernel boot arguments"></bootargs>
-            <kern_load_addr desc="The loading address in host memory for the VM kernel">0x100000</kern_load_addr>
-            <kern_entry_addr desc="The entry address in host memory for the VM kernel">0x100000</kern_entry_addr>
+            <kern_load_addr desc="The loading address in host memory for the VM kernel">0x8000</kern_load_addr>
+            <kern_entry_addr desc="The entry address in host memory for the VM kernel">0x8000</kern_entry_addr>
         </os_config>
         <vuart id="0">
             <type configurable="0" desc="vCOM1 type">VUART_LEGACY_PIO</type>
@@ -114,6 +119,9 @@
         <pci_devs desc="pci devices list">
             <pci_dev desc="pci device" />
         </pci_devs>
+        <mmio_resources desc="mmio devices list to passthrough">
+            <TPM2 desc="TPM2 device">n</TPM2>
+        </mmio_resources>
     </vm>
     <vm id="1">
         <vm_type desc="Specify the VM type" readonly="true">SOS_VM</vm_type>
@@ -159,7 +167,7 @@
             <rootfs desc="rootfs for Linux kernel">/dev/sda3</rootfs>
             <bootargs desc="Specify kernel boot arguments">
         rw rootwait console=tty0 consoleblank=0 no_timer_check quiet loglevel=3
-        i915.nuclear_pageflip=1
+        i915.nuclear_pageflip=1 swiotlb=131072
         </bootargs>
         </board_private>
     </vm>

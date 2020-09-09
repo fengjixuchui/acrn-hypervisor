@@ -27,6 +27,10 @@
         <ACPI_PARSE_ENABLED desc="Enable ACPI runtime parsing.">y</ACPI_PARSE_ENABLED>
         <L1D_VMENTRY_ENABLED desc="Enable L1 cache flush before VM entry.">n</L1D_VMENTRY_ENABLED>
         <MCE_ON_PSC_DISABLED desc="Force to disable software workaround for Machine Check Error on Page Size Change.">n</MCE_ON_PSC_DISABLED>
+        <IVSHMEM desc="IVSHMEM configuration">
+            <IVSHMEM_ENABLED desc="Enable Share Memory between VMs by IVSHMEM.">n</IVSHMEM_ENABLED>
+            <IVSHMEM_REGION desc="the name, size, colon separated IDs of communication VMs of share memory region, separated by comma like this: hv:/shm_region_0, 0x200000, 0:2"></IVSHMEM_REGION>
+        </IVSHMEM>
     </FEATURES>
 
     <MEMORY>
@@ -106,6 +110,9 @@
         <pci_dev desc="pci device">00:12.0 SATA controller: Intel Corporation Celeron N3350/Pentium N4200/Atom E3900 Series SATA AHCI Controller (rev 0b)</pci_dev>
         <pci_dev desc="pci device">02:00.0 Ethernet controller: Realtek Semiconductor Co., Ltd. RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller (rev 0c)</pci_dev>
     </pci_devs>
+    <mmio_resources desc="mmio devices list to passthrough">
+        <TPM2 desc="TPM2 device">n</TPM2>
+    </mmio_resources>
   </vm>
   <vm id="1">
     <vm_type desc="Specify the VM type" readonly="true">PRE_STD_VM</vm_type>
@@ -157,5 +164,8 @@
         <pci_dev desc="pci device">00:15.0 USB controller: Intel Corporation Celeron N3350/Pentium N4200/Atom E3900 Series USB xHCI (rev 0b)</pci_dev>
         <pci_dev desc="pci device">03:00.0 Ethernet controller: Realtek Semiconductor Co., Ltd. RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller (rev 0c)</pci_dev>
     </pci_devs>
+    <mmio_resources desc="mmio devices list to passthrough">
+        <TPM2 desc="TPM2 device">n</TPM2>
+    </mmio_resources>
   </vm>
 </acrn-config>

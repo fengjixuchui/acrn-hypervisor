@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 
+
 ACRN_CONFIG_TARGET = ''
 SOURCE_ROOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../../')
 HV_LICENSE_FILE = SOURCE_ROOT_DIR + 'misc/acrn-config/library/hypervisor_license'
@@ -19,7 +20,7 @@ PY_CACHES = ["__pycache__", "../board_config/__pycache__", "../scenario_config/_
 GUEST_FLAG = ["0UL", "GUEST_FLAG_SECURE_WORLD_ENABLED", "GUEST_FLAG_LAPIC_PASSTHROUGH",
               "GUEST_FLAG_IO_COMPLETION_POLLING", "GUEST_FLAG_HIDE_MTRR", "GUEST_FLAG_RT"]
 
-MULTI_ITEM = ["guest_flag", "pcpu_id", "vcpu_clos", "input", "block", "network", "pci_dev", "shmem_region"]
+MULTI_ITEM = ["guest_flag", "pcpu_id", "vcpu_clos", "input", "block", "network", "pci_dev", "shm_region"]
 
 SIZE_K = 1024
 SIZE_M = SIZE_K * 1024
@@ -45,7 +46,7 @@ class MultiItem():
         self.vir_console = []
         self.vir_network = []
         self.pci_dev = []
-        self.shmem_region = []
+        self.shm_region = []
 
 class TmpItem():
 
@@ -283,9 +284,9 @@ def get_leaf_value(tmp, tag_str, leaf):
     if leaf.tag == "pci_dev" and tag_str == "pci_dev":
         tmp.multi.pci_dev.append(leaf.text)
 
-    # get shmem_region for vm
-    if leaf.tag == "shmem_region" and tag_str == "shmem_region":
-        tmp.multi.shmem_region.append(leaf.text)
+    # get shm_region for vm
+    if leaf.tag == "shm_region" and tag_str == "shm_region":
+        tmp.multi.shm_region.append(leaf.text)
 
 
 def get_sub_value(tmp, tag_str, vm_id):
@@ -318,9 +319,9 @@ def get_sub_value(tmp, tag_str, vm_id):
     if tmp.multi.pci_dev and tag_str == "pci_dev":
         tmp.tag[vm_id] = tmp.multi.pci_dev
 
-    # append shmem_region for vm
-    if tmp.multi.shmem_region and tag_str == "shmem_region":
-        tmp.tag[vm_id] = tmp.multi.shmem_region
+    # append shm_region for vm
+    if tmp.multi.shm_region and tag_str == "shm_region":
+        tmp.tag[vm_id] = tmp.multi.shm_region
 
 
 def get_leaf_tag_map(config_file, branch_tag, tag_str=''):
@@ -526,3 +527,36 @@ def get_avl_dev_info(bdf_desc_map, pci_sub_class):
                 tmp_pci_desc.append(pci_desc_value.strip())
 
     return tmp_pci_desc
+
+
+def str2bool(v):
+    return v.lower() in ("yes", "true", "t", "y", "1") if v else False
+
+
+def get_leaf_tag_map_bool(config_file, branch_tag, tag_str=''):
+    """
+    This convert and return map's value from string to bool
+    """
+
+    result = {}
+
+    tag_map = get_leaf_tag_map(config_file, branch_tag, tag_str)
+    for vm_i, s in tag_map.items():
+        result[vm_i] = str2bool(s)
+
+    return result
+
+
+def hpa2gpa(vm_id, hpa, size):
+    return hpa
+
+
+def str2int(x):
+    s = x.replace(" ", "").lower()
+
+    if s:
+        base = 10
+        if s.startswith('0x'): base = 16
+        return int(s, base)
+
+    return 0
