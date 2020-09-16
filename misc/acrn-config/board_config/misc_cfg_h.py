@@ -10,7 +10,6 @@ import scenario_cfg_lib
 MISC_CFG_HEADER = """#ifndef MISC_CFG_H
 #define MISC_CFG_H"""
 
-NATIVE_TTYS_DIC = {}
 MISC_CFG_END = """#endif /* MISC_CFG_H */"""
 
 
@@ -21,83 +20,6 @@ class Vuart:
     v_type = {}
     v_base = {}
     v_irq = {}
-
-
-def get_valid_ttys_for_vuart(ttys_n):
-    """
-    Get available ttysn list for vuart0/vuart1
-    :param ttys_n: the serial port was chosen as hv console
-     """
-    vuart0_valid = []
-    vuart1_valid = ['ttyS0', 'ttyS1', 'ttyS2', 'ttyS3']
-    ttys_lines = board_cfg_lib.get_info(common.BOARD_INFO_FILE, "<TTYS_INFO>", "</TTYS_INFO>")
-    if ttys_lines:
-        vuart0_valid.clear()
-        for tty_line in ttys_lines:
-            tmp_dic = {}
-            #seri:/dev/ttySx type:mmio base:0x91526000 irq:4 [bdf:"00:18.0"]
-            #seri:/dev/ttySy type:portio base:0x2f8 irq:5
-            tty = tty_line.split('/')[2].split()[0]
-            ttys_irq = tty_line.split()[3].split(':')[1].strip()
-            ttys_type = tty_line.split()[1].split(':')[1].strip()
-            tmp_dic['irq'] = int(ttys_irq)
-            tmp_dic['type'] = ttys_type
-            NATIVE_TTYS_DIC[tty] = tmp_dic
-            vuart0_valid.append(tty)
-            if tty and tty in vuart1_valid:
-                vuart1_valid.remove(tty)
-
-    if not vuart1_valid:
-        common.print_yel("ttyS are fully used. ttyS0 is used for hv_console, ttyS1 is used for vuart1!", warn=True)
-        vuart1_valid = ['ttyS0', 'ttyS1', 'ttyS2', 'ttyS3']
-        if ttys_n in vuart1_valid:
-            vuart1_valid.remove(ttys_n)
-
-    return (vuart0_valid, vuart1_valid)
-
-
-def get_vuart_settings():
-    """
-    Get vuart setting from scenario setting
-    :return: vuart0/vuart1 setting dictionary
-    """
-    err_dic = {}
-    vuart0_setting = {}
-    vuart1_setting = {}
-
-    (err_dic, ttys_n) = board_cfg_lib.parser_hv_console()
-    if err_dic:
-        return err_dic
-
-    if ttys_n:
-        (vuart0_valid, vuart1_valid) = get_valid_ttys_for_vuart(ttys_n)
-
-        # VUART0 setting
-        if ttys_n not in list(NATIVE_TTYS_DIC.keys()):
-            vuart0_setting['ttyS0'] = board_cfg_lib.alloc_irq()
-        else:
-            if int(NATIVE_TTYS_DIC[ttys_n]['irq']) >= 16:
-                vuart0_setting[ttys_n] = board_cfg_lib.alloc_irq()
-            else:
-                vuart0_setting[ttys_n] = NATIVE_TTYS_DIC[ttys_n]['irq']
-    else:
-        vuart1_valid = ['ttyS1']
-
-    # VUART1 setting
-    # The IRQ of vUART1(COM2) might be hard-coded by SOS ACPI table(i.e. host ACPI),
-    # so we had better follow native COM2 IRQ assignment for vUART1 if COM2 is a legacy ttyS,
-    # otherwise function of vUART1 would be failed. If host COM2 does not exist or it is a PCI ttyS,
-    # then we could allocate a free IRQ for vUART1.
-
-    if 'ttyS1' in NATIVE_TTYS_DIC.keys() \
-        and NATIVE_TTYS_DIC['ttyS1']['type'] == "portio" \
-        and 'irq' in list(NATIVE_TTYS_DIC['ttyS1'].keys()) \
-        and NATIVE_TTYS_DIC['ttyS1']['irq'] < 16:
-        vuart1_setting['ttyS1'] = NATIVE_TTYS_DIC['ttyS1']['irq']
-    else:
-        vuart1_setting[vuart1_valid[0]] = board_cfg_lib.alloc_irq()
-
-    return (err_dic, vuart0_setting, vuart1_setting)
 
 
 def sos_bootarg_diff(sos_cmdlines, config):
@@ -129,12 +51,12 @@ def parse_boot_info():
     if 'SOS_VM' in common.VM_TYPES.values():
         sos_cmdlines = list(common.get_leaf_tag_map(common.SCENARIO_INFO_FILE, "board_private", "bootargs").values())
         sos_rootfs = list(common.get_leaf_tag_map(common.SCENARIO_INFO_FILE, "board_private", "rootfs").values())
-        (err_dic, vuart0_dic, vuart1_dic) = get_vuart_settings()
+        (err_dic, vuart0_dic, vuart1_dic) = scenario_cfg_lib.get_sos_vuart_settings(launch_flag=False)
     else:
         sos_cmdlines = list(common.get_leaf_tag_map(common.SCENARIO_INFO_FILE, "os_config", "bootargs").values())
 
         sos_rootfs = list(common.get_leaf_tag_map(common.SCENARIO_INFO_FILE, "os_config", "rootfs").values())
-        (err_dic, vuart0_dic, vuart1_dic) = get_vuart_settings()
+        (err_dic, vuart0_dic, vuart1_dic) = scenario_cfg_lib.get_sos_vuart_settings(launch_flag=False)
 
     return (err_dic, sos_cmdlines, sos_rootfs, vuart0_dic, vuart1_dic)
 
@@ -147,6 +69,102 @@ def clos_per_vm_gen(config):
     for i,clos_list_i in clos_per_vm.items():
         clos_config = scenario_cfg_lib.clos_assignment(clos_per_vm, i)
         print("#define VM{0}_VCPU_CLOS\t\t\t{1}".format(i, clos_config['clos_map']), file=config)
+
+
+def cpu_affinity_output(cpu_bits, i, config):
+
+    if "SOS_VM" == common.VM_TYPES[i]:
+        print("", file=config)
+        print("#define SOS_VM_CONFIG_CPU_AFFINITY\t{0}".format(
+            cpu_bits['cpu_map']), file=config)
+    else:
+        print("#define VM{0}_CONFIG_CPU_AFFINITY\t{1}".format(
+            i, cpu_bits['cpu_map']), file=config)
+
+
+def cpu_affinity_per_vm_gen(config):
+
+    cpus_per_vm = common.get_leaf_tag_map(
+        common.SCENARIO_INFO_FILE, "cpu_affinity", "pcpu_id")
+
+    for vm_i,_ in common.VM_TYPES.items():
+        cpu_bits = scenario_cfg_lib.cpus_assignment(cpus_per_vm, vm_i)
+        cpu_affinity_output(cpu_bits, vm_i, config)
+
+    print("", file=config)
+
+
+def pci_dev_num_per_vm_gen(config):
+
+    pci_items = common.get_leaf_tag_map(common.SCENARIO_INFO_FILE, "pci_devs", "pci_dev")
+    pci_devs = scenario_cfg_lib.get_pci_devs(pci_items)
+    pci_dev_num = scenario_cfg_lib.get_pci_num(pci_devs)
+
+    ivshmem_region = common.get_hv_item_tag(common.SCENARIO_INFO_FILE,
+        "FEATURES", "IVSHMEM", "IVSHMEM_REGION")
+
+    shmem_enabled = common.get_hv_item_tag(common.SCENARIO_INFO_FILE,
+        "FEATURES", "IVSHMEM", "IVSHMEM_ENABLED")
+
+    shmem_regions = scenario_cfg_lib.get_shmem_regions(ivshmem_region)
+    shmem_num = scenario_cfg_lib.get_shmem_num(shmem_regions)
+
+    for vm_i,vm_type in common.VM_TYPES.items():
+        if "POST_LAUNCHED_VM" == scenario_cfg_lib.VM_DB[vm_type]['load_type']:
+           if shmem_enabled == 'y' and vm_i in shmem_num.keys():
+                print("#define VM{}_CONFIG_PCI_DEV_NUM\t{}U".format(vm_i, shmem_num[vm_i]), file=config)
+        elif "PRE_LAUNCHED_VM" == scenario_cfg_lib.VM_DB[vm_type]['load_type']:
+            shmem_num_i = 0
+            if shmem_enabled == 'y' and vm_i in shmem_num.keys():
+                shmem_num_i = shmem_num[vm_i]
+            print("#define VM{}_CONFIG_PCI_DEV_NUM\t{}U".format(vm_i, pci_dev_num[vm_i] + shmem_num_i), file=config)
+
+    print("", file=config)
+
+
+def split_cmdline(cmd_str, config):
+
+    cmd_list = [i for i in cmd_str.strip('"').split()]
+    if not cmd_list: return
+
+    last_idx = len(cmd_list) - 1
+    for idx, cmd_arg in enumerate(cmd_list):
+        if idx == 0:
+            print('"', end="", file=config)
+        elif idx % 4 == 0:
+            print("\\\n", end="", file=config)
+
+        if idx == last_idx:
+            print('{}"'.format(cmd_arg), file=config)
+        else:
+            print('{} '.format(cmd_arg), end="", file=config)
+
+
+def boot_args_per_vm_gen(config):
+    kern_args = common.get_leaf_tag_map(common.SCENARIO_INFO_FILE, "os_config", "bootargs")
+
+    for vm_i,vm_type in common.VM_TYPES.items():
+        if "PRE_LAUNCHED_VM" == scenario_cfg_lib.VM_DB[vm_type]['load_type']:
+            if vm_i in kern_args.keys() and kern_args[vm_i]:
+                print("#define VM{}_BOOT_ARGS\t".format(vm_i), end="", file=config)
+                split_cmdline(kern_args[vm_i].strip(), config)
+                print("", file=config)
+
+    print("", file=config)
+
+
+def pt_intx_num_vm0_gen(config):
+
+    phys_gsi, virt_gsi = common.get_pt_intx_table(common.SCENARIO_INFO_FILE)
+
+    if (board_cfg_lib.is_matched_board(("ehl-crb-b"))
+        and phys_gsi.get(0) is not None
+        and len(phys_gsi[0]) > 0):
+        print("#define VM0_PT_INTX_NUM\t{}U".format(len(phys_gsi[0])), file=config)
+    else:
+        print("#define VM0_PT_INTX_NUM\t0U", file=config)
+
+    print("", file=config)
 
 
 def generate_file(config):
@@ -251,9 +269,31 @@ def generate_file(config):
         sos_bootarg_diff(sos_cmdlines, config)
         print("", file=config)
 
+    cpu_affinity_per_vm_gen(config)
+
     common_clos_max = board_cfg_lib.get_common_clos_max()
     max_mba_clos_entries = common_clos_max
     max_cache_clos_entries = common_clos_max
+
+    comments_max_clos = '''
+/*
+ * The maximum CLOS that is allowed by ACRN hypervisor,
+ * its value is set to be least common Max CLOS (CPUID.(EAX=0x10,ECX=ResID):EDX[15:0])
+ * among all supported RDT resources in the platform. In other words, it is
+ * min(maximum CLOS of L2, L3 and MBA). This is done in order to have consistent
+ * CLOS allocations between all the RDT resources.
+ */'''
+
+    comments_max_mba_clos = '''
+/*
+ * Max number of Cache Mask entries corresponding to each CLOS.
+ * This can vary if CDP is enabled vs disabled, as each CLOS entry
+ * will have corresponding cache mask values for Data and Code when
+ * CDP is enabled.
+ */'''
+
+    comments_max_cache_clos = '''
+/* Max number of MBA delay entries corresponding to each CLOS. */'''
 
     if board_cfg_lib.is_cdp_enabled():
         max_cache_clos_entries_cdp_enable = 2 * common_clos_max
@@ -262,17 +302,31 @@ def generate_file(config):
 
         print("#ifdef CONFIG_RDT_ENABLED", file=config)
         print("#ifdef CONFIG_CDP_ENABLED", file=config)
+        print(comments_max_clos, file=config)
         print("#define HV_SUPPORTED_MAX_CLOS\t{}U".format(common_clos_max), file=config)
+
+        print(comments_max_cache_clos, file=config)
         print("#define MAX_CACHE_CLOS_NUM_ENTRIES\t{}U".format(max_cache_clos_entries_cdp_enable), file=config)
+
         print("#else", file=config)
+        print(comments_max_clos, file=config)
         print("#define HV_SUPPORTED_MAX_CLOS\t{}U".format(common_clos_max_cdp_disable), file=config)
+
+        print(comments_max_cache_clos, file=config)
         print("#define MAX_CACHE_CLOS_NUM_ENTRIES\t{}U".format(max_cache_clos_entries), file=config)
         print("#endif", file=config)
+
+        print(comments_max_mba_clos, file=config)
         print("#define MAX_MBA_CLOS_NUM_ENTRIES\t{}U".format(max_mba_clos_entries), file=config)
     else:
         print("#ifdef CONFIG_RDT_ENABLED", file=config)
+        print(comments_max_clos, file=config)
         print("#define HV_SUPPORTED_MAX_CLOS\t{}U".format(common_clos_max), file=config)
+
+        print(comments_max_mba_clos, file=config)
         print("#define MAX_MBA_CLOS_NUM_ENTRIES\t{}U".format(max_mba_clos_entries), file=config)
+
+        print(comments_max_cache_clos, file=config)
         print("#define MAX_CACHE_CLOS_NUM_ENTRIES\t{}U".format(max_cache_clos_entries), file=config)
         if not board_cfg_lib.is_rdt_supported():
             print("#endif", file=config)
@@ -307,8 +361,16 @@ def generate_file(config):
     if vm0_pre_launch and board_cfg_lib.is_tpm_passthru():
         print("#define VM0_PASSTHROUGH_TPM", file=config)
         print("#define VM0_TPM_BUFFER_BASE_ADDR   0xFED40000UL", file=config)
+        gpa = common.hpa2gpa(0, 0xFED40000, 0x5000)
+        print("#define VM0_TPM_BUFFER_BASE_ADDR_GPA   0x{:X}UL".format(gpa), file=config)
         print("#define VM0_TPM_BUFFER_SIZE        0x5000UL", file=config)
         print("", file=config)
+
+    pci_dev_num_per_vm_gen(config)
+
+    boot_args_per_vm_gen(config)
+
+    pt_intx_num_vm0_gen(config)
 
     print("{}".format(MISC_CFG_END), file=config)
 
