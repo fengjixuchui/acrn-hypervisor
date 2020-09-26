@@ -698,6 +698,17 @@ def vcpu_clos_check(cpus_per_vm, clos_per_vm, prime_item, item):
 def share_mem_check(shmem_regions, raw_shmem_regions, vm_type_info, prime_item, item, sub_item):
 
     shmem_names = {}
+
+    MAX_SHMEM_REGION_NUM = 8
+    shmem_region_num = 0
+    for raw_shmem_region in raw_shmem_regions:
+        if raw_shmem_region is not None and  raw_shmem_region.strip() != '':
+            shmem_region_num += 1
+    if shmem_region_num > MAX_SHMEM_REGION_NUM:
+        key = "hv,{},{},{},{}".format(prime_item, item, sub_item, MAX_SHMEM_REGION_NUM)
+        ERR_LIST[key] = "The number of hv-land shmem regions should not be greater than {}.".format(MAX_SHMEM_REGION_NUM)
+        return
+
     for shm_i, shm_list in shmem_regions.items():
         for shm_str in shm_list:
             index = -1
@@ -724,7 +735,7 @@ def share_mem_check(shmem_regions, raw_shmem_regions, vm_type_info, prime_item, 
             try:
                 curr_vm_id = int(shm_i)
             except:
-                ERR_LIST[key] = "share memory region should be configured with format like this: hv:/shm_region_0, 0x200000, 0:2"
+                ERR_LIST[key] = "The shared memory region should be configured with format like this: hv:/shm_region_0, 2, 0:2"
                 return
             name = shm_str_splited[0].strip()
             size = shm_str_splited[1].strip()
@@ -759,15 +770,12 @@ def share_mem_check(shmem_regions, raw_shmem_regions, vm_type_info, prime_item, 
 
             int_size = 0
             try:
-                if size.isdecimal():
-                    int_size = int(size)
-                else:
-                    int_size = int(size, 16)
+                int_size = int(size) * 0x100000
             except:
-                ERR_LIST[key] = "The size of share Memory region should be decimal or hexadecimal."
+                ERR_LIST[key] = "The size of the shared memory region should be a decimal number."
                 return
             if int_size < 0x200000 or int_size > 0x20000000:
-                ERR_LIST[key] = "The size of share Memory region should be in [2MB, 512MB]."
+                ERR_LIST[key] = "The size of the shared memory region should be in the range of [2MB, 512MB]."
                 return
             if not ((int_size & (int_size-1) == 0) and int_size != 0):
                 ERR_LIST[key] = "The size of share Memory region should be a power of 2."

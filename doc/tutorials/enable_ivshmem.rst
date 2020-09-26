@@ -31,7 +31,7 @@ where
    For example, to set up a shared memory of 2 megabytes, use ``2``
    instead of ``shm_size``. The two communicating VMs must define the same size.
 
-.. note:: This device can be used with Real-Time VM (RTVM) as well.
+.. note:: This device can be used with real-time VM (RTVM) as well.
 
 ivshmem hv-land usage
 *********************
@@ -61,6 +61,8 @@ enable it using the  :ref:`acrn_configuration_tool` with these steps:
 	-  ``VM IDs``   - Specify the VM IDs to use the same shared memory
 	   communication and separate it with ``:``. For example, the
 	   communication between VM0 and VM2, it can be written as ``0:2``
+
+   .. note:: You can define up to eight ``ivshmem`` hv-land shared regions.
 
 - Build the XML configuration, refer to :ref:`getting-started-building`
 
