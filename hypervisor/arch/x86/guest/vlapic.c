@@ -1873,7 +1873,7 @@ vlapic_set_local_intr(struct acrn_vm *vm, uint16_t vcpu_id_arg, uint32_t lvt_ind
 }
 
 /**
- * @brief Inject MSI to target VM.
+ * @brief Inject MSI to target VM for case that local APIC is virtualized.
  *
  * @param[in] vm   Pointer to VM data structure
  * @param[in] addr MSI address.
@@ -1884,8 +1884,7 @@ vlapic_set_local_intr(struct acrn_vm *vm, uint16_t vcpu_id_arg, uint32_t lvt_ind
  *
  * @pre vm != NULL
  */
-int32_t
-vlapic_intr_msi(struct acrn_vm *vm, uint64_t addr, uint64_t msg)
+static int32_t inject_msi_for_non_lapic_pt(struct acrn_vm *vm, uint64_t addr, uint64_t msg)
 {
 	uint32_t delmode, vec;
 	uint32_t dest;
@@ -1925,6 +1924,99 @@ vlapic_intr_msi(struct acrn_vm *vm, uint64_t addr, uint64_t msg)
 	} else {
 		dev_dbg(DBG_LEVEL_VLAPIC, "lapic MSI invalid addr %#lx", address.full);
 	        ret = -1;
+	}
+
+	return ret;
+}
+
+/**
+ *@pre Pointer vm shall point to SOS_VM
+ */
+static void inject_msi_for_lapic_pt(struct acrn_vm *vm, uint64_t addr, uint64_t data)
+{
+	union apic_icr icr;
+	struct acrn_vcpu *vcpu;
+	union msi_addr_reg vmsi_addr;
+	union msi_data_reg vmsi_data;
+	uint64_t vdmask = 0UL;
+	uint32_t vdest, dest = 0U;
+	uint16_t vcpu_id;
+	bool phys;
+
+	vmsi_addr.full = addr;
+	vmsi_data.full = (uint32_t)data;
+
+	dev_dbg(DBG_LEVEL_LAPICPT, "%s: msi_addr 0x%016lx, msi_data 0x%016lx",
+		__func__, addr, data);
+
+	if (vmsi_addr.bits.addr_base == MSI_ADDR_BASE) {
+		vdest = vmsi_addr.bits.dest_field;
+		phys = (vmsi_addr.bits.dest_mode == MSI_ADDR_DESTMODE_PHYS);
+		/*
+		 * calculate all reachable destination vcpu.
+		 * the delivery mode of vmsi will be forwarded to ICR delievry field
+		 * and handled by hardware.
+		 */
+		vlapic_calc_dest_lapic_pt(vm, &vdmask, false, vdest, phys);
+		dev_dbg(DBG_LEVEL_LAPICPT, "%s: vcpu destination mask 0x%016lx", __func__, vdmask);
+
+		vcpu_id = ffs64(vdmask);
+		while (vcpu_id != INVALID_BIT_INDEX) {
+			bitmap_clear_nolock(vcpu_id, &vdmask);
+			vcpu = vcpu_from_vid(vm, vcpu_id);
+			dest |= per_cpu(lapic_ldr, pcpuid_from_vcpu(vcpu));
+			vcpu_id = ffs64(vdmask);
+		}
+
+		icr.value = 0UL;
+		icr.bits.dest_field = dest;
+		icr.bits.vector = vmsi_data.bits.vector;
+		icr.bits.delivery_mode = vmsi_data.bits.delivery_mode;
+		icr.bits.destination_mode = MSI_ADDR_DESTMODE_LOGICAL;
+
+		msr_write(MSR_IA32_EXT_APIC_ICR, icr.value);
+		dev_dbg(DBG_LEVEL_LAPICPT, "%s: icr.value 0x%016lx", __func__, icr.value);
+	}
+}
+
+/**
+ * @brief Inject MSI to target VM for both virtual local APIC and local APIC pass-through cases.
+ *
+ * @param[in] vm   Pointer to VM data structure.
+ * @param[in] addr MSI address.
+ * @param[in] data  MSI data.
+ *
+ * @retval 0 on success.
+ * @retval -1 on error that addr is invalid.
+ *
+ * @pre vm != NULL
+ */
+int32_t vlapic_inject_msi(struct acrn_vm *vm, uint64_t addr, uint64_t data)
+{
+	int32_t ret = -1;
+
+	/* For target cpu with lapic pt, send ipi instead of injection via vlapic */
+	if (is_lapic_pt_configured(vm)) {
+		enum vm_vlapic_mode vlapic_mode = check_vm_vlapic_mode(vm);
+
+		if (vlapic_mode == VM_VLAPIC_X2APIC) {
+			/*
+			 * All the vCPUs of VM are in x2APIC mode and LAPIC is PT
+			 * Inject the vMSI as an IPI directly to VM
+			 */
+			inject_msi_for_lapic_pt(vm, addr, data);
+			ret = 0;
+		} else if (vlapic_mode == VM_VLAPIC_XAPIC) {
+			/*
+			 * All the vCPUs of VM are in xAPIC and use vLAPIC
+			 * Inject using vLAPIC
+			 */
+			ret = inject_msi_for_non_lapic_pt(vm, addr, data);
+		} else {
+			/* Returns error for VM_VLAPIC_DISABLED and VM_VLAPIC_TRANSITION cases*/
+		}
+	} else {
+		ret = inject_msi_for_non_lapic_pt(vm, addr, data);
 	}
 
 	return ret;
