@@ -212,6 +212,7 @@ ifeq ($(CONFIG_MULTIBOOT2),y)
 BOOT_C_SRCS += boot/multiboot2.c
 endif
 BOOT_C_SRCS += boot/reloc.c
+BOOT_C_SRCS += arch/x86/ptcm.c
 
 # hardware management component
 HW_S_SRCS += arch/x86/idt.S
@@ -309,6 +310,7 @@ VP_DM_C_SRCS += dm/vpci/vmsi.c
 VP_DM_C_SRCS += dm/vpci/vmsix.c
 VP_DM_C_SRCS += dm/vpci/vmsix_on_msi.c
 VP_DM_C_SRCS += dm/vpci/vsriov.c
+VP_DM_C_SRCS += dm/vpci/vmcs9900.c
 VP_DM_C_SRCS += dm/mmio_dev.c
 VP_DM_C_SRCS += dm/vgpio.c
 VP_DM_C_SRCS += arch/x86/guest/vlapic.c

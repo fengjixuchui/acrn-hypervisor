@@ -35,6 +35,7 @@
 #include <trampoline.h>
 #include <assign.h>
 #include <vgpio.h>
+#include <ptcm.h>
 
 /* Local variables */
 
@@ -228,7 +229,16 @@ static void prepare_prelaunched_vm_memmap(struct acrn_vm *vm, const struct acrn_
 		const struct e820_entry *entry = &(vm->e820_entries[i]);
 
 		if (entry->length == 0UL) {
-			break;
+			continue;
+		} else {
+			if (is_psram_initialized && (entry->baseaddr == PSRAM_BASE_GPA) &&
+				((vm_config->guest_flags & GUEST_FLAG_RT) != 0U)){
+				/* pass through pSRAM to pre-RTVM */
+				pr_fatal("%s, %d___", __func__, __LINE__);
+				ept_add_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp,
+					PSRAM_BASE_HPA, PSRAM_BASE_GPA, PSRAM_MAX_SIZE, EPT_RWX | EPT_WB);
+				continue;
+			}
 		}
 
 		if (remaining_hpa_size >= entry->length) {
@@ -354,6 +364,11 @@ static void prepare_sos_vm_memmap(struct acrn_vm *vm)
 	/* unmap PCIe MMCONFIG region since it's owned by hypervisor */
 	pci_mmcfg = get_mmcfg_region();
 	ept_del_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp, pci_mmcfg->address, get_pci_mmcfg_size(pci_mmcfg));
+
+	/* TODO: remove pSRAM from SOS prevent SOS to use clflush to flush the pSRAM cache.
+	 * If we remove this EPT mapping from the SOS, the ACRN-DM can't do pSRAM EPT mapping
+	 * because the SOS can't get the HPA of this memory region.
+	 */
 }
 
 /* Add EPT mapping of EPC reource for the VM */
@@ -478,7 +493,7 @@ int32_t create_vm(uint16_t vm_id, uint64_t pcpu_bitmap, struct acrn_vm_config *v
 		enable_iommu();
 
 		/* Create virtual uart;*/
-		init_vuart(vm, vm_config->vuart);
+		init_legacy_vuarts(vm, vm_config->vuart);
 
 		register_reset_port_handler(vm);
 
@@ -622,7 +637,7 @@ int32_t shutdown_vm(struct acrn_vm *vm)
 
 	ptirq_remove_configured_intx_remappings(vm);
 
-	deinit_vuart(vm);
+	deinit_legacy_vuarts(vm);
 
 	deinit_vpci(vm);
 

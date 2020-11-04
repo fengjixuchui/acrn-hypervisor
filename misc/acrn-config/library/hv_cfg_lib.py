@@ -231,3 +231,10 @@ def max_msix_table_num_check(max_msix_table_num, cap_str, max_msi_num_str):
     if native_max_msix_line:
         native_max_msix_num = native_max_msix_line[0].strip()
         range_check(native_max_msix_num, "In board xml", max_msi_num_str, RANGE_DB['MSIX_TABLE_NUM'])
+
+
+def hv_psram_check(psram_enabled, cpd_enabled, feature, tag, leaf):
+    key = 'hv,{},{},{}'.format(feature, tag, leaf)
+    if psram_enabled == 'y' and cpd_enabled == 'y':
+        ERR_LIST[key] = "PSRAM_ENABLED should not be y when CDP_ENABLED is y."
+        return

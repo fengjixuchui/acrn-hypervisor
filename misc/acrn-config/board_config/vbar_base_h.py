@@ -16,6 +16,24 @@ VBAR_INFO_DEFINE="""#ifndef VBAR_BASE_H_
 
 VBAR_INFO_ENDIF="""#endif /* VBAR_BASE_H_ */"""
 
+# Constants for ivshmem
+BAR0_SHEMEM_SIZE = 4*common.SIZE_K
+BAR1_SHEMEM_SIZE = 4*common.SIZE_K
+BAR0_SHEMEM_ALIGNMENT = 4*common.SIZE_K
+BAR1_SHEMEM_ALIGNMENT = 4*common.SIZE_K
+BAR2_SHEMEM_ALIGNMENT = 0x200000
+
+# Constants for pci vuart
+PCI_VUART_VBAR0_SIZE = 4*common.SIZE_K
+PCI_VUART_VBAR1_SIZE = 4*common.SIZE_K
+PCI_VUART_VBAR0_ALIGNMENT = 4*common.SIZE_K
+PCI_VUART_VBAR1_ALIGNMENT = 4*common.SIZE_K
+
+# Constants for vmsix bar
+VMSIX_VBAR_SIZE = 4*common.SIZE_K
+VMSIX_VBAR_ALIGNMENT = VMSIX_VBAR_SIZE
+
+
 class MmioWindow(namedtuple(
         "MmioWindow", [
             "start",
@@ -84,7 +102,10 @@ def write_vbar(i_cnt, bdf, pci_bar_dic, bar_attr, \
                     bar_len += 1
                     # For pre-launched VM, the windows range is form 2G to 4G
                     free = get_free_mmio([MmioWindow(start=common.SIZE_2G, end=common.SIZE_4G-1)], \
-                        mmiolist_per_vm[vm_i], 4 * common.SIZE_K)
+                        mmiolist_per_vm[vm_i], VMSIX_VBAR_ALIGNMENT + VMSIX_VBAR_SIZE)
+                    free_vbar_start_addr = common.round_up(free.start, VMSIX_VBAR_ALIGNMENT)
+                    free_vbar_end_addr = free_vbar_start_addr + VMSIX_VBAR_SIZE - 1
+                    free = MmioWindow(free_vbar_start_addr, free_vbar_end_addr)
                     mmiolist_per_vm[vm_i].append(free)
                     mmiolist_per_vm[vm_i].sort()
                     break
@@ -99,9 +120,11 @@ def write_vbar(i_cnt, bdf, pci_bar_dic, bar_attr, \
 
             if bar_num == bar_len:
                 if bar_len == 1:
-                    print("#define %-38s" % (tmp_sub_name+"_VBAR"), "       .vbar_base[{}] = {}{}UL".format(bar_i, ptdev_mmio_str, bar_val), file=config)
+                    print("#define %-38s" % (tmp_sub_name+"_VBAR"), "       .vbar_base[{}] = {}{}UL" \
+                            .format(bar_i, ptdev_mmio_str, bar_val), file=config)
                 else:
-                    print("{}.vbar_base[{}] = {}{}UL".format(align, bar_i, ptdev_mmio_str, bar_val), file=config)
+                    print("{}.vbar_base[{}] = {}{}UL" \
+                            .format(align, bar_i, ptdev_mmio_str, bar_val), file=config)
             elif bar_num == 1:
                 print("#define %-38s" % (tmp_sub_name+"_VBAR"), "       .vbar_base[{}] = {}{}UL, \\".format(bar_i, ptdev_mmio_str, bar_val), file=config)
             else:
@@ -128,6 +151,66 @@ def find_next_bar(bar_val, bar_list):
     return idx
 
 
+def write_vuart_vbar(mmiolist_per_vm, sos_mmio_range, config):
+    # get legacy vuart information
+    vuart0_setting = common.get_vuart_info_id(common.SCENARIO_INFO_FILE, 0)
+    vuart1_setting = common.get_vuart_info_id(common.SCENARIO_INFO_FILE, 1)
+    # get pci vuart information
+    vuarts = common.get_vuart_info(common.SCENARIO_INFO_FILE)
+    for vm_id in vuarts.keys():
+        vm_type = common.VM_TYPES[vm_id]
+        if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "POST_LAUNCHED_VM":
+            continue
+        for vuart_id in vuarts[vm_id].keys():
+            if vuarts[vm_id][vuart_id]['base'] == "INVALID_PCI_BASE":
+                continue
+            # Skip pci vuart 0 if the legacy vuart 0 is enabled
+            if vuart_id == 0 and vm_id in vuart0_setting \
+                 and vuart0_setting[vm_id]['base'] != "INVALID_COM_BASE":
+                continue
+            # Skip pci vuart 1 if the legacy vuart 1 is enabled
+            if vuart_id == 1 and vm_id in vuart1_setting \
+                 and vuart1_setting[vm_id]['base'] != "INVALID_COM_BASE":
+                continue
+            free_bar0 = []
+            free_bar1 = []
+            # vuart decice requires 2 bars
+            if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "SOS_VM":
+                free_bar0 = get_free_mmio(sos_mmio_range, mmiolist_per_vm[vm_id], \
+                             PCI_VUART_VBAR0_SIZE + PCI_VUART_VBAR0_ALIGNMENT)
+                free_bar0_start_addr = common.round_up(free_bar0.start, PCI_VUART_VBAR0_ALIGNMENT)
+                free_bar0_end_addr = free_bar0_start_addr + PCI_VUART_VBAR0_SIZE - 1
+                free_bar0 = MmioWindow(free_bar0_start_addr, free_bar0_end_addr)
+                mmiolist_per_vm[vm_id].append(free_bar0)
+                mmiolist_per_vm[vm_id].sort()
+                free_bar1 = get_free_mmio(sos_mmio_range, mmiolist_per_vm[vm_id], \
+                             PCI_VUART_VBAR1_SIZE + PCI_VUART_VBAR1_ALIGNMENT)
+                free_bar1_start_addr = common.round_up(free_bar1.start, PCI_VUART_VBAR1_ALIGNMENT)
+                free_bar1_end_addr = free_bar1_start_addr + PCI_VUART_VBAR1_SIZE - 1
+                free_bar1 = MmioWindow(free_bar1_start_addr, free_bar1_end_addr)
+                mmiolist_per_vm[vm_id].append(free_bar1)
+                mmiolist_per_vm[vm_id].sort()
+            elif scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "PRE_LAUNCHED_VM":
+                free_bar0 = get_free_mmio([MmioWindow(start=common.SIZE_2G, end=common.SIZE_4G-1)], \
+                                mmiolist_per_vm[vm_id], PCI_VUART_VBAR0_SIZE + PCI_VUART_VBAR0_ALIGNMENT)
+                free_bar0_start_addr = common.round_up(free_bar0.start, PCI_VUART_VBAR0_ALIGNMENT)
+                free_bar0_end_addr = free_bar0_start_addr + PCI_VUART_VBAR0_SIZE - 1
+                free_bar0 = MmioWindow(free_bar0_start_addr, free_bar0_end_addr)
+                mmiolist_per_vm[vm_id].append(free_bar0)
+                mmiolist_per_vm[vm_id].sort()
+                free_bar1 = get_free_mmio([MmioWindow(start=common.SIZE_2G, end=common.SIZE_4G-1)], \
+                                mmiolist_per_vm[vm_id], PCI_VUART_VBAR1_SIZE + PCI_VUART_VBAR1_ALIGNMENT)
+                free_bar1_start_addr = common.round_up(free_bar1.start, PCI_VUART_VBAR1_ALIGNMENT)
+                free_bar1_end_addr = free_bar1_start_addr + PCI_VUART_VBAR1_SIZE - 1
+                free_bar1 = MmioWindow(free_bar1_start_addr, free_bar1_end_addr)
+                mmiolist_per_vm[vm_id].append(free_bar1)
+                mmiolist_per_vm[vm_id].sort()
+            print("#define VM%s" %(str(vm_id) + "_VUART_%-28s") % (str(vuart_id) + "_VBAR"),
+                  "       .vbar_base[0] = {:#x}UL, \\".format(free_bar0.start), file=config)
+            print("{}.vbar_base[1] = {:#x}UL".format(' ' * 54, free_bar1.start), file=config)
+            print("", file=config)
+
+
 def is_mmio_window_used(devinfo, keywords):
     for k in keywords:
         if k in devinfo:
@@ -152,12 +235,14 @@ def get_mmio_windows_with_key(keywords):
 
 def removed_nested(list1, list2):
     if not list1 or not list2:
-        raise ValueError("Invalid inputs: None, list1 is {}, \list2 is {}".format (list1, list2))
+        return list1
 
     resolvedList = list1[:]
     for w1 in resolvedList:
         for w2 in list2:
             if w2.start <= w1.start <= w2.end and w2.start <= w1.end <= w2.end:
+                if w1 not in resolvedList:
+                    continue
                 resolvedList.remove(w1)
     return sorted(resolvedList)
 
@@ -180,11 +265,15 @@ def merged_windows(windowslist):
 
 
 def get_free_mmio(windowslist, used, size):
+    if not size:
+        raise ValueError("allocate size cannot be {}".format(size))
+    if not windowslist:
+        raise ValueError("No mmio range is specified:{}".format(windowslist))
     for w in windowslist:
-        window = MmioWindow(start=w.end-size+1, end=w.end)
-        for u in used[::-1]:
+        window = MmioWindow(start=w.start, end=w.start+size-1)
+        for u in used:
             if window.overlaps(u):
-                window = MmioWindow(start=u.start-size, end=u.start-1)
+                window = MmioWindow(start=u.end+1, end=u.end+size)
                 continue
         if window.overlaps(w):
             return window
@@ -212,15 +301,21 @@ def generate_file(config):
         if all((d not in pci_devs_per_vm[i] for i in pci_devs_per_vm))
         ]
 
-    mmiolist_per_vm = {}
     for vm_i in pci_devs_per_vm:
         vm_type = common.VM_TYPES[vm_i]
         if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "SOS_VM":
             pci_devs_per_vm[vm_i] = sos_bdf_list
+
+    mmiolist_per_vm = {}
+    for vm_i,vm_type in common.VM_TYPES.items():
+        if vm_i not in mmiolist_per_vm.keys():
+            mmiolist_per_vm[vm_i] = []
+        if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "SOS_VM":
             mmiolist_per_vm[vm_i] = non_matching_mmios
         else:
-            match, _ = get_mmio_windows_with_key(pci_devs[vm_i])
-            mmiolist_per_vm[vm_i] = match
+            if vm_i in pci_devs.keys():
+                match, _ = get_mmio_windows_with_key(pci_devs[vm_i])
+                mmiolist_per_vm[vm_i] = match
             if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "PRE_LAUNCHED_VM":
                 if vm_i not in mmiolist_per_vm.keys():
                     mmiolist_per_vm[vm_i] = []
@@ -240,11 +335,14 @@ def generate_file(config):
     print(VBAR_INFO_DEFINE, file=config)
     common.get_vm_types()
     pre_vm = False
+    sos_vm = False
     for vm_type in common.VM_TYPES.values():
         if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "PRE_LAUNCHED_VM":
             pre_vm = True
+        if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "SOS_VM":
+            sos_vm = True
 
-    if not pre_vm:
+    if not pre_vm and not sos_vm:
         print(VBAR_INFO_ENDIF, file=config)
         return
 
@@ -259,20 +357,6 @@ def generate_file(config):
                     i_cnt = 0
                     for bar_i, bar_attr in bar_attr_dic.items():
                         i_cnt += 1
-                        if bar_i == 0:
-                            if len(bar_attr_dic.keys()) == 1:
-                                print("#define IVSHMEM_DEVICE_%-23s" % (str(index) + "_VBAR"),
-                                    "       .vbar_base[{}] = {}UL".format(bar_i, bar_attr.addr), file=config)
-                            else:
-                                print("#define IVSHMEM_DEVICE_%-23s" % (str(index) + "_VBAR"),
-                                    "       .vbar_base[{}] = {}UL, \\".format(bar_i, bar_attr.addr), file=config)
-                            bar_0 = MmioWindow(start = int(bar_attr.addr, 16), end = int(bar_attr.addr, 16) + 0x200100)
-                            mmiolist_per_vm[vm_id].append(bar_0)
-                            mmiolist_per_vm[vm_id].sort()
-                        elif i_cnt == len(bar_attr_dic.keys()):
-                            print("{}.vbar_base[{}] = {}UL".format(' ' * 54, bar_i, bar_attr.addr), file=config)
-                        else:
-                            print("{}.vbar_base[{}] = {}UL, \\".format(' ' * 54, bar_i, bar_attr.addr), file=config)
                         if bar_i == 2:
                             raw_shmem_regions = common.get_hv_item_tag(common.SCENARIO_INFO_FILE, "FEATURES", "IVSHMEM", "IVSHMEM_REGION")
                             for shm in raw_shmem_regions:
@@ -287,10 +371,78 @@ def generate_file(config):
                                 except:
                                     int_size = 0
                             bar_2 = int(bar_attr.addr, 16)
-                            mmiolist_per_vm[vm_id].append(MmioWindow(start = bar_2, end = bar_2 + int_size + 0x200000))
+                            mmiolist_per_vm[vm_id].append(MmioWindow(start = bar_2, end = bar_2 + int_size - 1))
                             mmiolist_per_vm[vm_id].sort()
+                        if bar_i == 0:
+                            bar_0 = MmioWindow(start = int(bar_attr.addr, 16), end = int(bar_attr.addr, 16) + 0x100 - 1)
+                            mmiolist_per_vm[vm_id].append(bar_0)
+                            mmiolist_per_vm[vm_id].sort()
+                            if len(bar_attr_dic.keys()) == 1:
+                                print("#define IVSHMEM_DEVICE_%-23s" % (str(index) + "_VBAR"),
+                                    "       .vbar_base[{}] = {}UL".format(bar_i, bar_attr.addr), file=config)
+                            else:
+                                print("#define IVSHMEM_DEVICE_%-23s" % (str(index) + "_VBAR"),
+                                    "       .vbar_base[{}] = {}UL, \\".format(bar_i, bar_attr.addr), file=config)
+                                # vbar[1] for share memory is fix to 4K
+                                free_bar = get_free_mmio([MmioWindow(start=common.SIZE_2G, end=common.SIZE_4G-1)], \
+                                                mmiolist_per_vm[vm_id], BAR1_SHEMEM_ALIGNMENT + BAR1_SHEMEM_SIZE)
+                                free_bar_start_addr = common.round_up(free_bar.start, BAR1_SHEMEM_ALIGNMENT)
+                                free_bar_end_addr = free_bar_start_addr + BAR1_SHEMEM_SIZE - 1
+                                free_bar = MmioWindow(free_bar_start_addr, free_bar_end_addr)
+                                mmiolist_per_vm[vm_id].append(free_bar)
+                                mmiolist_per_vm[vm_id].sort()
+                                print("{}.vbar_base[1] = {:#x}UL, \\".format(' ' * 54, free_bar.start), file=config)
+                        elif i_cnt == len(bar_attr_dic.keys()):
+                            print("{}.vbar_base[{}] = {}UL".format(' ' * 54, bar_i, bar_attr.addr), file=config)
+                        else:
+                            print("{}.vbar_base[{}] = {}UL, \\".format(' ' * 54, bar_i, bar_attr.addr), file=config)
                     print("", file=config)
+            elif scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "SOS_VM":
+                ivshmem_region = common.get_hv_item_tag(common.SCENARIO_INFO_FILE,
+                        "FEATURES", "IVSHMEM", "IVSHMEM_REGION")
+                shmem_regions = scenario_cfg_lib.get_shmem_regions(ivshmem_region)
+                if vm_id not in shmem_regions.keys():
+                    continue
+                idx = 0
+                for shm in ivshmem_region:
+                    if shm is None or shm.strip() == '':
+                        continue
+                    shm_splited = shm.split(',')
+                    name = shm_splited[0].strip()
+                    size = shm_splited[1].strip()
+                    try:
+                        int_size = int(size) * 0x100000
+                    except:
+                        int_size = 0
+                    # vbar[0] for shared memory is 0x100
+                    free_bar0 = get_free_mmio(matching_mmios, mmiolist_per_vm[vm_id], BAR0_SHEMEM_ALIGNMENT + BAR0_SHEMEM_SIZE)
+                    free_bar0_start_addr = common.round_up(free_bar0.start, BAR0_SHEMEM_ALIGNMENT)
+                    free_bar0_end_addr = free_bar0_start_addr + BAR0_SHEMEM_SIZE - 1
+                    free_bar0 = MmioWindow(free_bar0_start_addr, free_bar0_end_addr)
+                    mmiolist_per_vm[vm_id].append(free_bar0)
+                    mmiolist_per_vm[vm_id].sort()
+                    # vbar[1] for shared memory is 4K
+                    free_bar1 = get_free_mmio(matching_mmios, mmiolist_per_vm[vm_id], BAR1_SHEMEM_ALIGNMENT + BAR1_SHEMEM_SIZE)
+                    free_bar1_start_addr = common.round_up(free_bar1.start, BAR1_SHEMEM_ALIGNMENT)
+                    free_bar1_end_addr = free_bar1_start_addr + BAR1_SHEMEM_SIZE - 1
+                    free_bar1 = MmioWindow(free_bar1_start_addr, free_bar1_end_addr)
+                    mmiolist_per_vm[vm_id].append(free_bar1)
+                    mmiolist_per_vm[vm_id].sort()
+                    # vbar[2] for shared memory is specified size in MB
+                    free_bar2 = get_free_mmio(matching_mmios, mmiolist_per_vm[vm_id], BAR2_SHEMEM_ALIGNMENT + int_size)
+                    free_bar2_start_addr = common.round_up(free_bar2.start, BAR2_SHEMEM_ALIGNMENT) + 0xC
+                    free_bar2_end_addr = free_bar2_start_addr + int_size - 1
+                    free_bar2 = MmioWindow(free_bar2_start_addr, free_bar2_end_addr)
+                    mmiolist_per_vm[vm_id].append(free_bar2)
+                    mmiolist_per_vm[vm_id].sort()
+                    print("#define SOS_IVSHMEM_DEVICE_%-19s" % (str(idx) + "_VBAR"),
+                         "       .vbar_base[0] = {:#x}UL, \\".format(free_bar0.start), file=config)
+                    print("{}.vbar_base[1] = {:#x}UL, \\".format(' ' * 54, free_bar1.start), file=config)
+                    print("{}.vbar_base[2] = {:#x}UL".format(' ' * 54, free_bar2.start), file=config)
+                    print("", file=config)
+                    idx += 1
 
+    # Get passthrough devices vbar bases
     compared_bdf = []
     for cnt_sub_name in board_cfg_lib.SUB_NAME_COUNT.keys():
         i_cnt = 0
@@ -305,4 +457,5 @@ def generate_file(config):
 
             i_cnt += 1
 
+    write_vuart_vbar(mmiolist_per_vm, matching_mmios, config)
     print(VBAR_INFO_ENDIF, file=config)

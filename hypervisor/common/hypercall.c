@@ -21,19 +21,22 @@
 #include <ioapic.h>
 #include <mmio_dev.h>
 #include <ivshmem.h>
+#include <vmcs9900.h>
+#include <ptcm.h>
 
 #define DBG_LEVEL_HYCALL	6U
 
-typedef int32_t (*emul_dev_op) (struct acrn_vm *vm, struct acrn_emul_dev *dev);
+typedef int32_t (*emul_dev_create) (struct acrn_vm *vm, struct acrn_emul_dev *dev);
+typedef int32_t (*emul_dev_destroy) (struct pci_vdev *vdev);
 struct emul_dev_ops {
 	/*
 	 * The low 32 bits represent the vendor id and device id of PCI device,
 	 * and the high 32 bits represent the device number of the legacy device
 	 */
 	uint64_t dev_id;
-	emul_dev_op create;
-	emul_dev_op destroy;
-
+	/* TODO: to re-use vdev_init/vdev_deinit directly in hypercall */
+	emul_dev_create create;
+	emul_dev_destroy destroy;
 };
 
 static struct emul_dev_ops emul_dev_ops_tbl[] = {
@@ -42,6 +45,7 @@ static struct emul_dev_ops emul_dev_ops_tbl[] = {
 #else
 	{(IVSHMEM_VENDOR_ID | (IVSHMEM_DEVICE_ID << 16U)), NULL, NULL},
 #endif
+	{(MCS9900_VENDOR | (MCS9900_DEV << 16U)), create_vmcs9900_vdev, destroy_vmcs9900_vdev},
 };
 
 bool is_hypercall_from_ring0(void)
@@ -252,10 +256,13 @@ int32_t hcall_destroy_vm(__unused struct acrn_vm *vm, struct acrn_vm *target_vm,
 {
 	int32_t ret = -1;
 
+	get_vm_lock(target_vm);
 	if (is_paused_vm(target_vm)) {
 		/* TODO: check target_vm guest_flags */
 		ret = shutdown_vm(target_vm);
 	}
+	put_vm_lock(target_vm);
+
 	return ret;
 }
 
@@ -573,6 +580,16 @@ static int32_t add_vm_memory_region(struct acrn_vm *vm, struct acrn_vm *target_v
 				prot |= EPT_WP;
 			} else {
 				prot |= EPT_UNCACHED;
+			}
+			/* If pSRAM is initialized, and HV received a request to map pSRAM area to guest,
+			 * we should add EPT_WB flag to make pSRAM effective.
+			 * Assumption: SOS must assign the PSRAM area as a whole and as a separate memory
+			 * region whose base address is PSRAM_BASE_HPA
+			 * TODO: We can enforce WB for any region has overlap with pSRAM, for simplicity,
+			 * and leave it to SOS to make sure it won't violate.
+			 */
+			if (hpa == PSRAM_BASE_HPA && is_psram_initialized == true) {
+				prot |= EPT_WB;
 			}
 			/* create gpa to hpa EPT mapping */
 			ept_add_mr(target_vm, pml4_page, hpa,
@@ -1216,16 +1233,30 @@ int32_t hcall_destroy_vdev(struct acrn_vm *vm, struct acrn_vm *target_vm, __unus
 {
 	int32_t ret = -EINVAL;
 	struct acrn_emul_dev dev;
+	struct pci_vdev *vdev;
 	struct emul_dev_ops *op;
+	union pci_bdf bdf;
 
 	/* We should only destroy a device to a post-launched VM at creating or pausing time for safety, not runtime or other cases*/
 	if (is_created_vm(target_vm) || is_paused_vm(target_vm)) {
 		if (copy_from_gpa(vm, &dev, param2, sizeof(dev)) == 0) {
-		op = find_emul_dev_ops(&dev);
-		if ((op != NULL) && (op->destroy != NULL)) {
-			ret = op->destroy(target_vm, &dev);
+			op = find_emul_dev_ops(&dev);
+			if (op != NULL) {
+				bdf.value = (uint16_t) dev.slot;
+				vdev = pci_find_vdev(&vm->vpci, bdf);
+				if (vdev != NULL) {
+					vdev->pci_dev_config->vbdf.value = UNASSIGNED_VBDF;
+					if (op->destroy != NULL) {
+						ret = op->destroy(vdev);
+					} else {
+						ret = 0;
+					}
+				} else {
+					pr_warn("%s, failed to destroy emulated device %x:%x.%x\n",
+						__func__, bdf.bits.b, bdf.bits.d, bdf.bits.f);
+				}
+			}
 		}
-	}
 	} else {
 		pr_err("%s, vm[%d] is not a postlaunched VM, or not in CREATED/PAUSED status to destroy a vdev\n", __func__, target_vm->vm_id);
 	}
