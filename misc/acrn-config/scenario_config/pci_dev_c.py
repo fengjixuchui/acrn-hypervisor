@@ -55,7 +55,8 @@ def find_unused_bdf(used_bdf, case):
         # vuart device cannot detect function difference, find vbdf based on dev increment
         for dev in range(0x20):
             bdf = BusDevFunc(bus=0x00, dev=dev, func=0x0)
-            if bdf not in used_bdf:
+            #if bdf not in used_bdf:
+            if all((bdf.dev != in_use_bdf.dev for in_use_bdf in used_bdf)):
                 return bdf
     else:
         for dev in range(0x20):
@@ -105,6 +106,8 @@ def generate_file(vm_info, config):
     for bdf in compared_bdf:
         bdf_tuple = BusDevFunc.from_str(bdf)
         sos_used_bdf.append(bdf_tuple)
+    bdf_tuple = BusDevFunc(bus=0,dev=1,func=0)
+    sos_used_bdf.append(bdf_tuple)
 
     vuarts = common.get_vuart_info(common.SCENARIO_INFO_FILE)
     vuarts_num = scenario_cfg_lib.get_vuart_num(vuarts)
@@ -191,7 +194,7 @@ def generate_file(vm_info, config):
                     fun = int(pci_bdf_dev.split('.')[1], 16)
                     print("\t{", file=config)
                     print("\t\t.emu_type = {},".format(PCI_DEV_TYPE[1]), file=config)
-                    print("\t\t.vbdf.bits = {{.b = 0x00U, .d = 0x{0:02d}U, .f = 0x00U}},".format(pci_cnt), file=config)
+                    print("\t\t.vbdf.bits = {{.b = 0x00U, .d = 0x{0:02x}U, .f = 0x00U}},".format(pci_cnt), file=config)
                     for bdf, bar_attr in board_cfg_lib.PCI_DEV_BAR_DESC.pci_dev_dic.items():
                         if bdf == pci_bdf_dev:
                             print("\t\tPTDEV({}),".format(board_cfg_lib.PCI_DEV_BAR_DESC.pci_dev_dic[bdf].name_w_i_cnt), file=config)
@@ -203,49 +206,42 @@ def generate_file(vm_info, config):
                     pci_cnt += 1
 
         # Insert ivshmem information
-        if vm_info.shmem.shmem_enabled == 'y' and vm_i in vm_info.shmem.shmem_regions.keys() \
+        if vm_info.shmem.shmem_enabled == 'y' and vm_i in vm_info.shmem.shmem_regions \
              and len(vm_info.shmem.shmem_regions[vm_i]) > 0:
             raw_shm_list = vm_info.shmem.shmem_regions[vm_i]
+            index = 0
             for shm in raw_shm_list:
                 shm_splited = shm.split(',')
                 print("\t{", file=config)
                 print("\t\t.emu_type = {},".format(PCI_DEV_TYPE[0]), file=config)
-                if vm_i in vm_info.cfg_pci.pci_devs.keys():
-                    if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "SOS_VM":
-                        free_bdf = find_unused_bdf(sos_used_bdf, "ivshmem")
-                        print("\t\t.vbdf.bits = {{.b = 0x00U, .d = 0x{:02d}U, .f = 0x{:02d}U}}," \
-                             .format(free_bdf.dev,free_bdf.func), file=config)
-                        print("\t\t.vdev_ops = &vpci_ivshmem_ops,", file=config)
-                        sos_used_bdf.append(free_bdf)
-                    else:
-                        print("\t\t.vbdf.bits = {{.b = 0x00U, .d = 0x{0:02d}U, .f = 0x00U}},".format(pci_cnt), file=config)
-                        print("\t\t.vdev_ops = &vpci_ivshmem_ops,", file=config)
-                        bdf_tuple = BusDevFunc(0,pci_cnt,0)
-                        vm_used_bdf.append(bdf_tuple)
-                elif vm_i not in vm_info.cfg_pci.pci_devs.keys():
-                    if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "PRE_LAUNCHED_VM":
-                        print("\t\t.vbdf.bits = {{.b = 0x00U, .d = 0x{0:02d}U, .f = 0x00U}},".format(pci_cnt), file=config)
-                        bdf_tuple = BusDevFunc(0,pci_cnt,0)
-                        vm_used_bdf.append(bdf_tuple)
-                    elif scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "POST_LAUNCHED_VM":
-                        print("\t\t.vbdf.value = UNASSIGNED_VBDF,", file=config)
-                    print("\t\t.vdev_ops = &vpci_ivshmem_ops,", file=config)
-                for shm_name, bar_attr in board_cfg_lib.PCI_DEV_BAR_DESC.shm_bar_dic.items():
-                    index = shm_name[:shm_name.find('_')]
+
+                if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "SOS_VM":
+                    free_bdf = find_unused_bdf(sos_used_bdf, "ivshmem")
+                    print("\t\t.vbdf.bits = {{.b = 0x00U, .d = 0x{:02x}U, .f = 0x{:02x}U}}," \
+                            .format(free_bdf.dev,free_bdf.func), file=config)
+                    sos_used_bdf.append(free_bdf)
+                elif scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "PRE_LAUNCHED_VM":
+                    print("\t\t.vbdf.bits = {{.b = 0x00U, .d = 0x{0:02x}U, .f = 0x00U}},".format(pci_cnt), file=config)
+                    bdf_tuple = BusDevFunc(0,pci_cnt,0)
+                    vm_used_bdf.append(bdf_tuple)
+                elif scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "POST_LAUNCHED_VM":
+                    print("\t\t.vbdf.value = UNASSIGNED_VBDF,", file=config)
+                print("\t\t.vdev_ops = &vpci_ivshmem_ops,", file=config)
+
+                for shm_name,_ in board_cfg_lib.PCI_DEV_BAR_DESC.shm_bar_dic.items():
+                    region = shm_name[:shm_name.find('_')]
                     shm_name = shm_name[shm_name.find('_') + 1:]
                     if shm_name == shm_splited[0].strip():
                         if scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "PRE_LAUNCHED_VM":
-                            print("\t\t.shm_region_name = IVSHMEM_SHM_REGION_{},".format(index), file=config)
+                            print("\t\t.shm_region_name = IVSHMEM_SHM_REGION_{},".format(region), file=config)
                             print("\t\tIVSHMEM_DEVICE_{}_VBAR".format(index), file=config)
-                            break
                         elif scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "SOS_VM":
-                            print("\t\t.shm_region_name = IVSHMEM_SHM_REGION_{},".format(index), file=config)
+                            print("\t\t.shm_region_name = IVSHMEM_SHM_REGION_{},".format(region), file=config)
                             print("\t\tSOS_IVSHMEM_DEVICE_{}_VBAR".format(index), file=config)
-                            break
                         else:
-                            print("\t\t.shm_region_name = IVSHMEM_SHM_REGION_{}".format(index), file=config)
-                            break
+                            print("\t\t.shm_region_name = IVSHMEM_SHM_REGION_{}".format(region), file=config)
                 pci_cnt += 1
+                index += 1
                 print("\t},", file=config)
 
         if vm_i in vuarts.keys():
@@ -283,7 +279,7 @@ def generate_file(vm_info, config):
                     elif scenario_cfg_lib.VM_DB[vm_type]['load_type'] == "SOS_VM":
                         free_bdf = find_unused_bdf(sos_used_bdf, "vuart")
                         sos_used_bdf.append(free_bdf)
-                    print("\t\t.vbdf.bits = {{.b = 0x00U, .d = 0x{:02d}U, .f = 0x{:02d}U}},".format(free_bdf.dev,free_bdf.func), file=config)
+                    print("\t\t.vbdf.bits = {{.b = 0x00U, .d = 0x{:02x}U, .f = 0x00U}},".format(free_bdf.dev,free_bdf.func), file=config)
 
                 if vuart_id != 0:
                     print("\t\t.t_vuart.vm_id = {},".format(vuarts[vm_i][vuart_id]['target_vm_id']), file=config)

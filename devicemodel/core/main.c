@@ -81,6 +81,8 @@ char *vmname;
 char *guest_uuid_str;
 char *vsbl_file_name;
 char *ovmf_file_name;
+char *ovmf_code_file_name;
+char *ovmf_vars_file_name;
 char *kernel_file_name;
 char *elf_file_name;
 uint8_t trusty_enabled;
@@ -143,8 +145,8 @@ usage(int code)
 		"       %*s [--part_info part_info_name] [--enable_trusty] [--intr_monitor param_setting]\n"
 		"       %*s [--acpidev_pt HID] [--mmiodev_pt MMIO_Regions]\n"
 		"       %*s [--vtpm2 sock_path] [--virtio_poll interval] [--mac_seed seed_string]\n"
-		"       %*s [--vmcfg sub_options] [--dump vm_idx] [--debugexit] \n"
-		"       %*s [--logger-setting param_setting] [--pm_notify_channel]\n"
+		"       %*s [--cpu_affinity pCPUs] [--lapic_pt] [--rtvm] [--windows]\n"
+		"       %*s [--debugexit] [--logger-setting param_setting] [--pm_notify_channel]\n"
 		"       %*s [--psram]\n"
 		"       %*s [--pm_by_vuart vuart_node] <vm>\n"
 		"       -A: create ACPI tables\n"
@@ -163,10 +165,6 @@ usage(int code)
 		"       -W: force virtio to use single-vector MSI\n"
 		"       -Y: disable MPtable generation\n"
 		"       --mac_seed: set a platform unique string as a seed for generate mac address\n"
-#ifdef CONFIG_VM_CFG
-		"       --vmcfg: build-in VM configurations\n"
-		"       --dump: show build-in VM configurations\n"
-#endif
 		"       --vsbl: vsbl file path\n"
 		"       --psram: Enable pSRAM passthrough\n"
 		"       --ovmf: ovmf file path\n"
@@ -230,10 +228,7 @@ virtio_uses_msix(void)
 size_t
 high_bios_size(void)
 {
-	size_t size = 0;
-
-	if (ovmf_file_name)
-		size = ovmf_image_size();
+	size_t size = ovmf_image_size();
 
 	return roundup2(size, 2 * MB);
 }

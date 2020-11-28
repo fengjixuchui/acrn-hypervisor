@@ -256,12 +256,10 @@ int32_t hcall_destroy_vm(__unused struct acrn_vm *vm, struct acrn_vm *target_vm,
 {
 	int32_t ret = -1;
 
-	get_vm_lock(target_vm);
 	if (is_paused_vm(target_vm)) {
 		/* TODO: check target_vm guest_flags */
 		ret = shutdown_vm(target_vm);
 	}
-	put_vm_lock(target_vm);
 
 	return ret;
 }
@@ -588,7 +586,7 @@ static int32_t add_vm_memory_region(struct acrn_vm *vm, struct acrn_vm *target_v
 			 * TODO: We can enforce WB for any region has overlap with pSRAM, for simplicity,
 			 * and leave it to SOS to make sure it won't violate.
 			 */
-			if (hpa == PSRAM_BASE_HPA && is_psram_initialized == true) {
+			if ((hpa == PSRAM_BASE_HPA) && is_psram_initialized) {
 				prot |= EPT_WB;
 			}
 			/* create gpa to hpa EPT mapping */
@@ -1243,7 +1241,7 @@ int32_t hcall_destroy_vdev(struct acrn_vm *vm, struct acrn_vm *target_vm, __unus
 			op = find_emul_dev_ops(&dev);
 			if (op != NULL) {
 				bdf.value = (uint16_t) dev.slot;
-				vdev = pci_find_vdev(&vm->vpci, bdf);
+				vdev = pci_find_vdev(&target_vm->vpci, bdf);
 				if (vdev != NULL) {
 					vdev->pci_dev_config->vbdf.value = UNASSIGNED_VBDF;
 					if (op->destroy != NULL) {
