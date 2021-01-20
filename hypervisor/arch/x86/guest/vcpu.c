@@ -206,6 +206,7 @@ static void vcpu_reset_internal(struct acrn_vcpu *vcpu, enum reset_mode mode)
 	vcpu->arch.exception_info.exception = VECTOR_INVALID;
 	vcpu->arch.cur_context = NORMAL_WORLD;
 	vcpu->arch.irq_window_enabled = false;
+	vcpu->arch.emulating_lock = false;
 	(void)memset((void *)vcpu->arch.vmcs, 0U, PAGE_SIZE);
 
 	for (i = 0; i < NR_WORLD; i++) {
@@ -392,6 +393,20 @@ static struct acrn_vcpu_regs protect_mode_init_vregs = {
 	.ss_sel = 0x18U,
 	.es_sel = 0x18U,
 };
+
+bool sanitize_cr0_cr4_pattern(void)
+{
+	bool ret = false;
+
+	if (is_valid_cr0_cr4(realmode_init_vregs.cr0, realmode_init_vregs.cr4) &&
+			is_valid_cr0_cr4(protect_mode_init_vregs.cr0, protect_mode_init_vregs.cr4)) {
+		ret = true;
+	} else {
+		pr_err("Wrong CR0/CR4 pattern: real %lx %lx; protected %lx %lx\n", realmode_init_vregs.cr0,
+			realmode_init_vregs.cr4, protect_mode_init_vregs.cr0, protect_mode_init_vregs.cr4);
+	}
+	return ret;
+}
 
 void reset_vcpu_regs(struct acrn_vcpu *vcpu)
 {

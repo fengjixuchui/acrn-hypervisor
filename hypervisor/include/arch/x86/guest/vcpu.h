@@ -99,6 +99,11 @@
 #define ACRN_REQUEST_WAIT_WBINVD		9U
 
 /**
+ * @brief Request for split lock operation
+ */
+#define ACRN_REQUEST_SPLIT_LOCK			10U
+
+/**
  * @}
  */
 /* End of virt_int_injection */
@@ -154,7 +159,9 @@ enum vm_cpu_mode {
 #define	VCPU_EVENT_IOREQ		0
 #define	VCPU_EVENT_VIRTUAL_INTERRUPT	1
 #define	VCPU_EVENT_SYNC_WBINVD		2
-#define	VCPU_EVENT_NUM			3
+#define VCPU_EVENT_SPLIT_LOCK		3
+#define	VCPU_EVENT_NUM			4
+
 
 enum reset_mode;
 
@@ -230,12 +237,14 @@ struct acrn_vcpu_arch {
 
 	uint8_t lapic_mask;
 	bool irq_window_enabled;
+	bool emulating_lock;
 	uint32_t nrexits;
 
 	/* VCPU context state information */
 	uint32_t exit_reason;
 	uint32_t idt_vectoring_info;
 	uint64_t exit_qualification;
+	uint32_t proc_vm_exec_ctrls;
 	uint32_t inst_len;
 
 	/* Information related to secondary / AP VCPU start-up */
@@ -535,6 +544,8 @@ void set_vcpu_regs(struct acrn_vcpu *vcpu, struct acrn_vcpu_regs *vcpu_regs);
  * @return None
  */
 void reset_vcpu_regs(struct acrn_vcpu *vcpu);
+
+bool sanitize_cr0_cr4_pattern(void);
 
 /**
  * @brief Initialize the protect mode vcpu registers
