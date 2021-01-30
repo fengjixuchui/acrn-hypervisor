@@ -14,7 +14,12 @@
 #include <logmsg.h>
 #include <seed.h>
 #include <ld_sym.h>
-#include <boot.h>
+#include <multiboot.h>
+
+/* boot_regs store the multiboot info magic and address, defined in
+   arch/x86/boot/cpu_primary.S.
+   */
+extern uint32_t boot_regs[2];
 
 /* Push sp magic to top of stack for call trace */
 #define SWITCH_TO(rsp, to)                                              \
@@ -86,11 +91,13 @@ void init_primary_pcpu(void)
 	/* Clear BSS */
 	(void)memset(&ld_bss_start, 0U, (size_t)(&ld_bss_end - &ld_bss_start));
 
-	init_acrn_multiboot_info();
-
-	parse_hv_cmdline();
+	init_acrn_multiboot_info(boot_regs[0], boot_regs[1]);
 
 	init_debug_pre();
+
+	if (sanitize_acrn_multiboot_info(boot_regs[0], boot_regs[1]) != 0) {
+		panic("Multiboot info error!");
+	}
 
 	init_pcpu_pre(true);
 

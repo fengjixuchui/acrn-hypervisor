@@ -193,12 +193,12 @@ endif
 # platform boot component
 BOOT_S_SRCS += arch/x86/boot/cpu_primary.S
 BOOT_S_SRCS += arch/x86/boot/trampoline.S
-BOOT_C_SRCS += boot/multiboot.c
+BOOT_C_SRCS += boot/multiboot/multiboot.c
 ifeq ($(CONFIG_MULTIBOOT2),y)
-BOOT_C_SRCS += boot/multiboot2.c
+BOOT_C_SRCS += boot/multiboot/multiboot2.c
 endif
 BOOT_C_SRCS += boot/reloc.c
-BOOT_C_SRCS += arch/x86/ptcm.c
+BOOT_C_SRCS += arch/x86/rtcm.c
 
 # hardware management component
 HW_S_SRCS += arch/x86/idt.S
@@ -240,7 +240,6 @@ endif
 HW_C_SRCS += hw/pci.c
 HW_C_SRCS += arch/x86/configs/vm_config.c
 HW_C_SRCS += boot/acpi_base.c
-HW_C_SRCS += boot/cmdline.c
 # ACPI parsing component
 # This part should be isolated from FuSa Cert
 ifeq ($(CONFIG_ACPI_PARSE_ENABLED),y)
@@ -382,7 +381,7 @@ pre_build: $(HV_CONFIG_H) $(HV_CONFIG_TIMESTAMP)
 	$(MAKE) -C $(PRE_BUILD_DIR) BOARD=$(BOARD) SCENARIO=$(SCENARIO) TARGET_DIR=$(HV_CONFIG_DIR)
 	@$(HV_OBJDIR)/hv_prebuild_check.out
 	@echo "generate the binary of ACPI tables for pre-launched VMs ..."
-	python3 ../misc/acrn-config/acpi_gen/bin_gen.py --board $(BOARD) --scenario $(SCENARIO) --asl $(HV_CONFIG_DIR) --out $(HV_OBJDIR)/acpi
+	python3 ../misc/config_tools/acpi_gen/bin_gen.py --board $(BOARD) --scenario $(SCENARIO) --asl $(HV_CONFIG_DIR) --out $(HV_OBJDIR)/acpi
 
 .PHONY: header
 header: $(VERSION) $(HV_CONFIG_H)

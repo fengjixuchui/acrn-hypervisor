@@ -28,7 +28,7 @@
 #include <uart16550.h>
 #include <vpci.h>
 #include <ivshmem.h>
-#include <ptcm.h>
+#include <rtcm.h>
 
 #define CPU_UP_TIMEOUT		100U /* millisecond */
 #define CPU_DOWN_TIMEOUT	100U /* millisecond */
@@ -129,10 +129,6 @@ void init_pcpu_pre(bool is_bsp)
 
 		if (detect_hardware_support() != 0) {
 			panic("hardware not support!");
-		}
-
-		if (sanitize_multiboot_info() != 0) {
-			panic("Multiboot info error!");
 		}
 
 		init_pcpu_model_name();
@@ -268,13 +264,13 @@ void init_pcpu_post(uint16_t pcpu_id)
 
 		ASSERT(get_pcpu_id() == BSP_CPU_ID, "");
 
-		init_psram(true);
+		init_software_sram(true);
 	} else {
 		pr_dbg("Core %hu is up", pcpu_id);
 
 		pr_warn("Skipping VM configuration check which should be done before building HV binary.");
 
-		init_psram(false);
+		init_software_sram(false);
 
 		/* Initialize secondary processor interrupts. */
 		init_interrupt(pcpu_id);
@@ -445,7 +441,7 @@ void cpu_dead(void)
 	if (bitmap_test(pcpu_id, &pcpu_active_bitmap)) {
 		/* clean up native stuff */
 		vmx_off();
-		/* TODO: a cpu dead can't effect the RTVM which use pSRAM */
+		/* TODO: a cpu dead can't effect the RTVM which use Software SRAM */
 		cache_flush_invalidate_all();
 
 		/* Set state to show CPU is dead */

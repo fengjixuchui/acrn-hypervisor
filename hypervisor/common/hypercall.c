@@ -22,7 +22,7 @@
 #include <mmio_dev.h>
 #include <ivshmem.h>
 #include <vmcs9900.h>
-#include <ptcm.h>
+#include <rtcm.h>
 
 #define DBG_LEVEL_HYCALL	6U
 
@@ -581,15 +581,17 @@ static int32_t add_vm_memory_region(struct acrn_vm *vm, struct acrn_vm *target_v
 			} else {
 				prot |= EPT_UNCACHED;
 			}
-			/* If pSRAM is initialized, and HV received a request to map pSRAM area to guest,
-			 * we should add EPT_WB flag to make pSRAM effective.
-			 * Assumption: SOS must assign the PSRAM area as a whole and as a separate memory
-			 * region whose base address is PSRAM_BASE_HPA
-			 * TODO: We can enforce WB for any region has overlap with pSRAM, for simplicity,
+			/* If Software SRAM is initialized, and HV received a request to map Software SRAM
+			 * area to guest, we should add EPT_WB flag to make Software SRAM effective.
+			 * TODO: We can enforce WB for any region has overlap with Software SRAM, for simplicity,
 			 * and leave it to SOS to make sure it won't violate.
 			 */
-			if ((hpa == PSRAM_BASE_HPA) && is_psram_initialized) {
-				prot |= EPT_WB;
+			if (is_sw_sram_initialized) {
+				base_paddr = get_software_sram_base();
+				if ((hpa >= base_paddr) &&
+					((hpa + region->size) <= (base_paddr + get_software_sram_size()))) {
+					prot |= EPT_WB;
+				}
 			}
 			/* create gpa to hpa EPT mapping */
 			ept_add_mr(target_vm, pml4_page, hpa,
