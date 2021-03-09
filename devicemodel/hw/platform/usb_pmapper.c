@@ -730,6 +730,7 @@ int
 usb_dev_reset(void *pdata)
 {
 	struct usb_dev *udev;
+	int rc = 0;
 
 	udev = pdata;
 
@@ -737,7 +738,12 @@ usb_dev_reset(void *pdata)
 	libusb_reset_device(udev->handle);
 	usb_dev_reset_ep(udev);
 	usb_dev_update_ep(udev);
-	return 0;
+	rc = libusb_reset_device(udev->handle);
+	if (!rc) {
+		usb_dev_reset_ep(udev);
+		usb_dev_update_ep(udev);
+	}
+	return rc;
 }
 
 int
@@ -1067,6 +1073,7 @@ usb_dev_init(void *pdata, char *opt)
 		goto errout;
 
 	switch (desc.bcdUSB) {
+	case 0x320:
 	case 0x310:
 	case 0x300:
 		ver = 3; break;

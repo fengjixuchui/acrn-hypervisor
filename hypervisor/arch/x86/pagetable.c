@@ -13,13 +13,34 @@
 
 #define DBG_LEVEL_MMU	6U
 
+
+static void try_to_free_pgtable_page(const struct memory_ops *mem_ops,
+			uint64_t *pde, uint64_t *pt_page, uint32_t type)
+{
+	if (type == MR_DEL) {
+		uint64_t index;
+
+		for (index = 0UL; index < PTRS_PER_PTE; index++) {
+			uint64_t *pte = pt_page + index;
+			if ((mem_ops->pgentry_present(*pte) != 0UL)) {
+				break;
+			}
+		}
+
+		if (index == PTRS_PER_PTE) {
+			free_page(mem_ops->pool, (void *)pt_page);
+			sanitize_pte_entry(pde, mem_ops);
+		}
+	}
+}
+
 /*
  * Split a large page table into next level page table.
  *
  * @pre: level could only IA32E_PDPT or IA32E_PD
  */
 static void split_large_page(uint64_t *pte, enum _page_table_level level,
-		uint64_t vaddr, const struct memory_ops *mem_ops)
+		__unused uint64_t vaddr, const struct memory_ops *mem_ops)
 {
 	uint64_t *pbase;
 	uint64_t ref_paddr, paddr, paddrinc;
@@ -30,7 +51,6 @@ static void split_large_page(uint64_t *pte, enum _page_table_level level,
 		ref_paddr = (*pte) & PDPTE_PFN_MASK;
 		paddrinc = PDE_SIZE;
 		ref_prot = (*pte) & ~PDPTE_PFN_MASK;
-		pbase = (uint64_t *)mem_ops->get_pd_page(mem_ops->info, vaddr);
 		break;
 	default:	/* IA32E_PD */
 		ref_paddr = (*pte) & PDE_PFN_MASK;
@@ -38,10 +58,10 @@ static void split_large_page(uint64_t *pte, enum _page_table_level level,
 		ref_prot = (*pte) & ~PDE_PFN_MASK;
 		ref_prot &= ~PAGE_PSE;
 		mem_ops->recover_exe_right(&ref_prot);
-		pbase = (uint64_t *)mem_ops->get_pt_page(mem_ops->info, vaddr);
 		break;
 	}
 
+	pbase = (uint64_t *)alloc_page(mem_ops->pool);
 	dev_dbg(DBG_LEVEL_MMU, "%s, paddr: 0x%lx, pbase: 0x%lx\n", __func__, ref_paddr, pbase);
 
 	paddr = ref_paddr;
@@ -86,7 +106,7 @@ static inline void construct_pgentry(uint64_t *pde, void *pd_page, uint64_t prot
  * type: MR_DEL
  * delete [vaddr_start, vaddr_end) MT PT mapping
  */
-static void modify_or_del_pte(const uint64_t *pde, uint64_t vaddr_start, uint64_t vaddr_end,
+static void modify_or_del_pte(uint64_t *pde, uint64_t vaddr_start, uint64_t vaddr_end,
 		uint64_t prot_set, uint64_t prot_clr, const struct memory_ops *mem_ops, uint32_t type)
 {
 	uint64_t *pt_page = pde_page_vaddr(*pde);
@@ -114,6 +134,8 @@ static void modify_or_del_pte(const uint64_t *pde, uint64_t vaddr_start, uint64_
 			break;
 		}
 	}
+
+	try_to_free_pgtable_page(mem_ops, pde, pt_page, type);
 }
 
 /*
@@ -123,7 +145,7 @@ static void modify_or_del_pte(const uint64_t *pde, uint64_t vaddr_start, uint64_
  * type: MR_DEL
  * delete [vaddr_start, vaddr_end) MT PT mapping
  */
-static void modify_or_del_pde(const uint64_t *pdpte, uint64_t vaddr_start, uint64_t vaddr_end,
+static void modify_or_del_pde(uint64_t *pdpte, uint64_t vaddr_start, uint64_t vaddr_end,
 		uint64_t prot_set, uint64_t prot_clr, const struct memory_ops *mem_ops, uint32_t type)
 {
 	uint64_t *pd_page = pdpte_page_vaddr(*pdpte);
@@ -159,6 +181,8 @@ static void modify_or_del_pde(const uint64_t *pdpte, uint64_t vaddr_start, uint6
 		}
 		vaddr = vaddr_next;
 	}
+
+	try_to_free_pgtable_page(mem_ops, pdpte, pd_page, type);
 }
 
 /*
@@ -285,6 +309,7 @@ static void add_pde(const uint64_t *pdpte, uint64_t paddr_start, uint64_t vaddr_
 	uint64_t vaddr = vaddr_start;
 	uint64_t paddr = paddr_start;
 	uint64_t index = pde_index(vaddr);
+	uint64_t local_prot = prot;
 
 	dev_dbg(DBG_LEVEL_MMU, "%s, paddr: 0x%lx, vaddr: [0x%lx - 0x%lx]\n",
 		__func__, paddr, vaddr, vaddr_end);
@@ -296,12 +321,12 @@ static void add_pde(const uint64_t *pdpte, uint64_t paddr_start, uint64_t vaddr_
 			pr_fatal("%s, pde 0x%lx is already present!\n", __func__, vaddr);
 		} else {
 			if (mem_ops->pgentry_present(*pde) == 0UL) {
-				if (mem_ops->large_page_support(IA32E_PD) &&
+				if (mem_ops->large_page_support(IA32E_PD, prot) &&
 					mem_aligned_check(paddr, PDE_SIZE) &&
 					mem_aligned_check(vaddr, PDE_SIZE) &&
 					(vaddr_next <= vaddr_end)) {
-					mem_ops->tweak_exe_right(&prot);
-					set_pgentry(pde, paddr | (prot | PAGE_PSE), mem_ops);
+					mem_ops->tweak_exe_right(&local_prot);
+					set_pgentry(pde, paddr | (local_prot | PAGE_PSE), mem_ops);
 					if (vaddr_next < vaddr_end) {
 						paddr += (vaddr_next - vaddr);
 						vaddr = vaddr_next;
@@ -309,7 +334,7 @@ static void add_pde(const uint64_t *pdpte, uint64_t paddr_start, uint64_t vaddr_
 					}
 					break;	/* done */
 				} else {
-					void *pt_page = mem_ops->get_pt_page(mem_ops->info, vaddr);
+					void *pt_page = alloc_page(mem_ops->pool);
 					construct_pgentry(pde, pt_page, mem_ops->get_default_access_right(), mem_ops);
 				}
 			}
@@ -334,6 +359,7 @@ static void add_pdpte(const uint64_t *pml4e, uint64_t paddr_start, uint64_t vadd
 	uint64_t vaddr = vaddr_start;
 	uint64_t paddr = paddr_start;
 	uint64_t index = pdpte_index(vaddr);
+	uint64_t local_prot = prot;
 
 	dev_dbg(DBG_LEVEL_MMU, "%s, paddr: 0x%lx, vaddr: [0x%lx - 0x%lx]\n", __func__, paddr, vaddr, vaddr_end);
 	for (; index < PTRS_PER_PDPTE; index++) {
@@ -344,12 +370,12 @@ static void add_pdpte(const uint64_t *pml4e, uint64_t paddr_start, uint64_t vadd
 			pr_fatal("%s, pdpte 0x%lx is already present!\n", __func__, vaddr);
 		} else {
 			if (mem_ops->pgentry_present(*pdpte) == 0UL) {
-				if (mem_ops->large_page_support(IA32E_PDPT) &&
+				if (mem_ops->large_page_support(IA32E_PDPT, prot) &&
 					mem_aligned_check(paddr, PDPTE_SIZE) &&
 					mem_aligned_check(vaddr, PDPTE_SIZE) &&
 					(vaddr_next <= vaddr_end)) {
-					mem_ops->tweak_exe_right(&prot);
-					set_pgentry(pdpte, paddr | (prot | PAGE_PSE), mem_ops);
+					mem_ops->tweak_exe_right(&local_prot);
+					set_pgentry(pdpte, paddr | (local_prot | PAGE_PSE), mem_ops);
 					if (vaddr_next < vaddr_end) {
 						paddr += (vaddr_next - vaddr);
 						vaddr = vaddr_next;
@@ -357,7 +383,7 @@ static void add_pdpte(const uint64_t *pml4e, uint64_t paddr_start, uint64_t vadd
 					}
 					break;	/* done */
 				} else {
-					void *pd_page = mem_ops->get_pd_page(mem_ops->info, vaddr);
+					void *pd_page = alloc_page(mem_ops->pool);
 					construct_pgentry(pdpte, pd_page, mem_ops->get_default_access_right(), mem_ops);
 				}
 			}
@@ -394,7 +420,7 @@ void mmu_add(uint64_t *pml4_page, uint64_t paddr_base, uint64_t vaddr_base, uint
 		vaddr_next = (vaddr & PML4E_MASK) + PML4E_SIZE;
 		pml4e = pml4e_offset(pml4_page, vaddr);
 		if (mem_ops->pgentry_present(*pml4e) == 0UL) {
-			void *pdpt_page = mem_ops->get_pdpt_page(mem_ops->info, vaddr);
+			void *pdpt_page = alloc_page(mem_ops->pool);
 			construct_pgentry(pml4e, pdpt_page, mem_ops->get_default_access_right(), mem_ops);
 		}
 		add_pdpte(pml4e, paddr, vaddr, vaddr_end, prot, mem_ops);

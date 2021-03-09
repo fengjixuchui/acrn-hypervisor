@@ -171,7 +171,7 @@ enum reset_mode;
 #define SECURE_WORLD	1
 
 #define NUM_WORLD_MSRS		2U
-#define NUM_COMMON_MSRS		17U
+#define NUM_COMMON_MSRS		21U
 #define NUM_GUEST_MSRS		(NUM_WORLD_MSRS + NUM_COMMON_MSRS)
 
 #define EOI_EXIT_BITMAP_SIZE	256U
@@ -201,6 +201,13 @@ struct msr_store_area {
 	struct msr_store_entry guest[MSR_AREA_COUNT];
 	struct msr_store_entry host[MSR_AREA_COUNT];
 	uint32_t count;	/* actual count of entries to be loaded/restored during VMEntry/VMExit */
+};
+
+struct iwkey {
+	/* 256bit encryption key */
+	uint64_t encryption_key[4];
+	/* 128bit integration key */
+	uint64_t integrity_key[2];
 };
 
 struct acrn_vcpu_arch {
@@ -259,6 +266,16 @@ struct acrn_vcpu_arch {
 
 	/* EOI_EXIT_BITMAP buffer, for the bitmap update */
 	uint64_t eoi_exit_bitmap[EOI_EXIT_BITMAP_SIZE >> 6U];
+
+	/* Keylocker */
+	struct iwkey IWKey;
+	bool cr4_kl_enabled;
+	/*
+	 * Keylocker spec 4.4:
+	 * Bit 0 - Status of most recent copy to or from IWKeyBackup.
+	 * Bit 63:1 - Reserved.
+	 */
+	uint64_t iwkey_copy_status;
 } __aligned(PAGE_SIZE);
 
 struct acrn_vm;
@@ -591,6 +608,7 @@ struct acrn_vcpu *get_ever_run_vcpu(uint16_t pcpu_id);
 
 void save_xsave_area(struct acrn_vcpu *vcpu, struct ext_context *ectx);
 void rstore_xsave_area(const struct acrn_vcpu *vcpu, const struct ext_context *ectx);
+void load_iwkey(struct acrn_vcpu *vcpu);
 
 /**
  * @brief create a vcpu for the target vm

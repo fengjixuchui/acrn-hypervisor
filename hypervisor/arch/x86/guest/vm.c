@@ -280,6 +280,69 @@ static void prepare_prelaunched_vm_memmap(struct acrn_vm *vm, const struct acrn_
 	}
 }
 
+static void deny_pci_bar_access(struct acrn_vm *sos, const struct pci_pdev *pdev)
+{
+	uint32_t idx, mask;
+	struct pci_vbar vbar = {};
+	uint64_t base = 0UL, size = 0UL;
+	uint64_t *pml4_page;
+
+	pml4_page = (uint64_t *)sos->arch_vm.nworld_eptp;
+
+	for ( idx= 0; idx < pdev->nr_bars; idx++) {
+		vbar.bar_type.bits = pdev->bars[idx].phy_bar;
+		if (!is_pci_reserved_bar(&vbar)) {
+			base = pdev->bars[idx].phy_bar;
+			size = pdev->bars[idx].size_mask;
+			if (is_pci_mem64lo_bar(&vbar)) {
+				idx++;
+				base |= (((uint64_t)pdev->bars[idx].phy_bar) << 32UL);
+				size |= (((uint64_t)pdev->bars[idx].size_mask) << 32UL);
+			}
+
+			mask = (is_pci_io_bar(&vbar)) ? PCI_BASE_ADDRESS_IO_MASK : PCI_BASE_ADDRESS_MEM_MASK;
+			base &= mask;
+			size &= mask;
+			size = size & ~(size - 1UL);
+
+			if ((base != 0UL)) {
+				if (is_pci_io_bar(&vbar)) {
+					base &= 0xffffU;
+					deny_guest_pio_access(sos, base, size);
+				} else {
+					/*for passthru device MMIO BAR base must be 4K aligned. This is the requirement of passthru devices.*/
+					ASSERT((base & PAGE_MASK) != 0U, "%02x:%02x.%d bar[%d] 0x%lx, is not 4K aligned!",
+						pdev->bdf.bits.b, pdev->bdf.bits.d, pdev->bdf.bits.f, idx, base);
+					size =  round_page_up(size);
+					ept_del_mr(sos, pml4_page, base, size);
+				}
+			}
+		}
+	}
+}
+
+static void deny_pdevs(struct acrn_vm *sos, struct acrn_vm_pci_dev_config *pci_devs, uint16_t pci_dev_num)
+{
+	uint16_t i;
+
+	for (i = 0; i < pci_dev_num; i++) {
+		if ( pci_devs[i].pdev != NULL) {
+			deny_pci_bar_access(sos, pci_devs[i].pdev);
+		}
+	}
+}
+
+static void deny_hv_owned_devices(struct acrn_vm *sos)
+{
+	uint32_t i;
+
+	const struct pci_pdev **hv_owned = get_hv_owned_pdevs();
+
+	for (i = 0U; i < get_hv_owned_pdev_num(); i++) {
+		deny_pci_bar_access(sos, hv_owned[i]);
+	}
+}
+
 /**
  * @param[inout] vm pointer to a vm descriptor
  *
@@ -306,10 +369,6 @@ static void prepare_sos_vm_memmap(struct acrn_vm *vm)
 
 	pr_dbg("sos_vm: bottom memory - 0x%lx, top memory - 0x%lx\n",
 		p_mem_range_info->mem_bottom, p_mem_range_info->mem_top);
-
-	if (p_mem_range_info->mem_top > EPT_ADDRESS_SPACE(CONFIG_SOS_RAM_SIZE)) {
-		panic("Please configure SOS_VM_ADDRESS_SPACE correctly!\n");
-	}
 
 	/* create real ept map for all ranges with UC */
 	ept_add_mr(vm, pml4_page, p_mem_range_info->mem_bottom, p_mem_range_info->mem_bottom,
@@ -349,12 +408,16 @@ static void prepare_sos_vm_memmap(struct acrn_vm *vm)
 		vm_config = get_vm_config(vm_id);
 		if (vm_config->load_order == PRE_LAUNCHED_VM) {
 			ept_del_mr(vm, pml4_page, vm_config->memory.start_hpa, vm_config->memory.size);
+			/* Remove MMIO/IO bars of pre-launched VM's ptdev */
+			deny_pdevs(vm, vm_config->pci_devs, vm_config->pci_dev_num);
 		}
 
 		for (i = 0U; i < MAX_MMIO_DEV_NUM; i++) {
 			(void)deassign_mmio_dev(vm, &vm_config->mmiodevs[i]);
 		}
 	}
+
+	deny_hv_owned_devices(vm);
 
 	/* unmap AP trampoline code for security
 	 * This buffer is guaranteed to be page aligned.
@@ -365,10 +428,13 @@ static void prepare_sos_vm_memmap(struct acrn_vm *vm)
 	pci_mmcfg = get_mmcfg_region();
 	ept_del_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp, pci_mmcfg->address, get_pci_mmcfg_size(pci_mmcfg));
 
-	/* TODO: remove Software SRAM from SOS prevent SOS to use clflush to flush the Software SRAM cache.
-	 * If we remove this EPT mapping from the SOS, the ACRN-DM can't do Software SRAM EPT mapping
-	 * because the SOS can't get the HPA of this memory region.
+#if defined(PRE_RTVM_SW_SRAM_ENABLED)
+	/* remove Software SRAM region from Service VM EPT, to prevent Service VM from using clflush to
+	 * flush the Software SRAM cache.
+	 * This is applicable to prelaunch RTVM case only, for post-launch RTVM, Service VM is trusted.
 	 */
+	ept_del_mr(vm, pml4_page, PRE_RTVM_SW_SRAM_BASE_GPA, PRE_RTVM_SW_SRAM_END_GPA - PRE_RTVM_SW_SRAM_BASE_GPA);
+#endif
 }
 
 /* Add EPT mapping of EPC reource for the VM */
@@ -427,7 +493,7 @@ int32_t create_vm(uint16_t vm_id, uint64_t pcpu_bitmap, struct acrn_vm_config *v
 	vm->hw.created_vcpus = 0U;
 
 	init_ept_mem_ops(&vm->arch_vm.ept_mem_ops, vm->vm_id);
-	vm->arch_vm.nworld_eptp = vm->arch_vm.ept_mem_ops.get_pml4_page(vm->arch_vm.ept_mem_ops.info);
+	vm->arch_vm.nworld_eptp = alloc_ept_page(vm);
 	sanitize_pte((uint64_t *)vm->arch_vm.nworld_eptp, &vm->arch_vm.ept_mem_ops);
 
 	(void)memcpy_s(&vm->uuid[0], sizeof(vm->uuid),
@@ -445,10 +511,8 @@ int32_t create_vm(uint16_t vm_id, uint64_t pcpu_bitmap, struct acrn_vm_config *v
 			vm->sworld_control.flag.supported = 1U;
 		}
 		if (vm->sworld_control.flag.supported != 0UL) {
-			struct memory_ops *ept_mem_ops = &vm->arch_vm.ept_mem_ops;
-
 			ept_add_mr(vm, (uint64_t *)vm->arch_vm.nworld_eptp,
-				hva2hpa(ept_mem_ops->get_sworld_memory_base(ept_mem_ops->info)),
+				hva2hpa(vm->arch_vm.sworld_memory_base_hva),
 				TRUSTY_EPT_REBASE_GPA, TRUSTY_RAM_SIZE, EPT_WB | EPT_RWX);
 		}
 		if (vm_config->name[0] == '\0') {
@@ -468,6 +532,7 @@ int32_t create_vm(uint16_t vm_id, uint64_t pcpu_bitmap, struct acrn_vm_config *v
 		spinlock_init(&vm->vlapic_mode_lock);
 		spinlock_init(&vm->ept_lock);
 		spinlock_init(&vm->emul_mmio_lock);
+		spinlock_init(&vm->arch_vm.iwkey_backup_lock);
 
 		vm->arch_vm.vlapic_mode = VM_VLAPIC_XAPIC;
 		vm->intr_inject_delay_delta = 0UL;
@@ -717,6 +782,7 @@ int32_t reset_vm(struct acrn_vm *vm)
 	reset_vioapics(vm);
 	destroy_secure_world(vm, false);
 	vm->sworld_control.flag.active = 0UL;
+	vm->arch_vm.iwkey_backup_status = 0UL;
 	vm->state = VM_CREATED;
 
 	return ret;

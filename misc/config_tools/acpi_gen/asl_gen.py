@@ -402,9 +402,9 @@ def main(args):
     if isinstance(pcpu_list, list):
         pcpu_list = [x.strip() for x in pcpu_list]
     if out is None or out == '':
-        DEST_ACPI_PATH = os.path.join(VM_CONFIGS_PATH, 'scenarios', scenario_name, board_type)
+        DEST_ACPI_PATH = os.path.join(VM_CONFIGS_PATH, 'scenarios', scenario_name)
     else:
-        DEST_ACPI_PATH = os.path.join(common.SOURCE_ROOT_DIR, out, 'scenarios', scenario_name, board_type)
+        DEST_ACPI_PATH = os.path.join(common.SOURCE_ROOT_DIR, out, 'scenarios', scenario_name)
 
     if os.path.isdir(DEST_ACPI_PATH):
         for config in os.listdir(DEST_ACPI_PATH):
@@ -446,9 +446,9 @@ def main(args):
         PASSTHROUGH_PTCT = False
 
     kern_args = common.get_leaf_tag_map(scenario, "os_config", "bootargs")
-    vm_type = common.get_leaf_tag_map(scenario, "vm_type")
+    kern_type = common.get_leaf_tag_map(scenario, "os_config", "kern_type")
     for vm_id, passthru_devices in dict_passthru_devices.items():
-        if kern_args[int(vm_id)].find('reboot=acpi') == -1 and vm_type[int(vm_id)] not in ['SAFETY_VM']:
+        if kern_args[int(vm_id)].find('reboot=acpi') == -1 and kern_type[int(vm_id)] in ['KERNEL_BZIMAGE']:
             emsg = "you need to specify 'reboot=acpi' in scenario file's bootargs for VM{}".format(vm_id)
             print(emsg)
             err_dic['vm,bootargs'] = emsg

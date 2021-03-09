@@ -755,8 +755,8 @@ def get_legacy_vuart1_target_dict(legacy_vuart1):
 
         try:
             key = "vm:id={},legacy_vuart:id=1,target_vm_id".format(vm_i)
-            target_vm_id = get_target_vm_id(vuart_dict, vm_i)
             err_key = "vm:id={},legacy_vuart:id=1,target_uart_id".format(vm_i)
+            target_vm_id = get_target_vm_id(vuart_dict, vm_i)
             target_uart_id = get_target_uart_id(vuart_dict)
         except XmlError as exc:
             ERR_LIST[err_key] = str(exc)
@@ -1215,8 +1215,8 @@ def check_pt_intx(phys_gsi, virt_gsi):
     if not phys_gsi and not virt_gsi:
         return
 
-    if not board_cfg_lib.is_matched_board(('ehl-crb-b')):
-        ERR_LIST["pt_intx"] = "only board ehl-crb-b is supported"
+    if not board_cfg_lib.is_matched_board(('ehl-crb-b','generic_board')):
+        ERR_LIST["pt_intx"] = "only board ehl-crb-b/generic_board is supported"
         return
 
     if not VM_DB[common.VM_TYPES[0]]['load_type'] == "PRE_LAUNCHED_VM":

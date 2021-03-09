@@ -237,6 +237,25 @@ static uint32_t check_vmx_ctrl(uint32_t msr, uint32_t ctrl_req)
 
 }
 
+static uint32_t check_vmx_ctrl_64(uint32_t msr, uint64_t ctrl_req)
+{
+	uint64_t vmx_msr;
+	uint32_t ctrl = ctrl_req;
+
+	vmx_msr = msr_read(msr);
+
+	/* 64 bits are allowed 1-setting */
+	ctrl &= vmx_msr;
+
+	if ((ctrl_req & ~ctrl) != 0U) {
+		pr_err("VMX ctrl 0x%x not fully enabled: "
+			"request 0x%llx but get 0x%llx\n",
+			msr, ctrl_req, ctrl);
+	}
+
+	return ctrl;
+}
+
 static void init_exec_ctrl(struct acrn_vcpu *vcpu)
 {
 	uint32_t value32;
@@ -266,6 +285,7 @@ static void init_exec_ctrl(struct acrn_vcpu *vcpu)
 	 * guest access to IO bit-mapped ports causes VM exit
 	 * guest access to MSR causes VM exit
 	 * Activate secondary controls
+	 * Activate tertiary controls
 	 */
 	/* These are bits 1,4-6,8,13-16, and 26, the corresponding bits of
 	 * the IA32_VMX_PROCBASED_CTRLS MSR are always read as 1 --- A.3.2
@@ -273,7 +293,7 @@ static void init_exec_ctrl(struct acrn_vcpu *vcpu)
 	value32 = check_vmx_ctrl(MSR_IA32_VMX_PROCBASED_CTLS,
 			 VMX_PROCBASED_CTLS_TSC_OFF | VMX_PROCBASED_CTLS_TPR_SHADOW |
 			 VMX_PROCBASED_CTLS_IO_BITMAP | VMX_PROCBASED_CTLS_MSR_BITMAP |
-			 VMX_PROCBASED_CTLS_HLT | VMX_PROCBASED_CTLS_SECONDARY);
+			 VMX_PROCBASED_CTLS_HLT | VMX_PROCBASED_CTLS_SECONDARY | VMX_PROCBASED_CTLS_TERTIARY);
 
 	/*Disable VM_EXIT for CR3 access*/
 	value32 &= ~(VMX_PROCBASED_CTLS_CR3_LOAD | VMX_PROCBASED_CTLS_CR3_STORE);
@@ -334,6 +354,15 @@ static void init_exec_ctrl(struct acrn_vcpu *vcpu)
 
 	exec_vmwrite32(VMX_PROC_VM_EXEC_CONTROLS2, value32);
 	pr_dbg("VMX_PROC_VM_EXEC_CONTROLS2: 0x%x ", value32);
+
+	/* Set up tertiary processor based VM execution controls */
+	if ((exec_vmread32(VMX_PROC_VM_EXEC_CONTROLS) & VMX_PROCBASED_CTLS_TERTIARY) != 0U) {
+		/* Enable KeyLocker if support */
+		value64 = check_vmx_ctrl_64(MSR_IA32_VMX_PROCBASED_CTLS3, VMX_PROCBASED_CTLS3_LOADIWKEY);
+
+		exec_vmwrite64(VMX_PROC_VM_EXEC_CONTROLS3_FULL, value64);
+		pr_dbg("VMX_PROC_VM_EXEC_CONTROLS3: 0x%llx ", value64);
+	}
 
 	/*APIC-v, config APIC-access address*/
 	value64 = vlapic_apicv_get_apic_access_addr();

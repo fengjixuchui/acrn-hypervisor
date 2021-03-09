@@ -45,9 +45,9 @@ default: all
 
 include scripts/makefile/config.mk
 
-BOARD_INFO_DIR := $(HV_CONFIG_DIR)/boards/$(BOARD)
+BOARD_INFO_DIR := $(HV_CONFIG_DIR)/boards
 SCENARIO_CFG_DIR := $(HV_CONFIG_DIR)/scenarios/$(SCENARIO)
-BOARD_CFG_DIR := $(SCENARIO_CFG_DIR)/$(BOARD)
+BOARD_CFG_DIR := $(SCENARIO_CFG_DIR)
 
 include ../paths.make
 
@@ -336,7 +336,6 @@ SYS_INIT_C_OBJS := $(patsubst %.c,$(HV_OBJDIR)/%.o,$(SYS_INIT_C_SRCS))
 ifneq ($(CONFIG_RELEASE),y)
 CFLAGS += -DHV_DEBUG -DPROFILING_ON -fno-omit-frame-pointer
 endif
-CFLAGS += -DCONFIG_LAST_LEVEL_EPT_AT_BOOT
 
 MODULES += $(LIB_MOD)
 MODULES += $(BOOT_MOD)

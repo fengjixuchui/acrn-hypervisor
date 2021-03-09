@@ -19,16 +19,32 @@
 
 #define DBG_LEVEL_EPT	6U
 
-bool ept_is_mr_valid(const struct acrn_vm *vm, uint64_t base, uint64_t size)
+/*
+ * To enable the identical map and support of legacy devices/ACPI method in SOS,
+ * ACRN presents the entire host 0-4GB memory region to SOS, except the memory
+ * regions explicitly assigned to pre-launched VMs or HV (DRAM and MMIO). However,
+ * virtual e820 only contains the known DRAM regions. For this reason,
+ * we can't know if the GPA range is guest valid or not, by checking with
+ * its ve820 tables only.
+ *
+ * instead, we Check if the GPA range is guest valid by whether the GPA range is mapped
+ * in EPT pagetable or not
+ */
+bool ept_is_valid_mr(struct acrn_vm *vm, uint64_t mr_base_gpa, uint64_t mr_size)
 {
-	bool valid = true;
-	uint64_t end = base + size;
-	uint64_t top_address_space = vm->arch_vm.ept_mem_ops.info->ept.top_address_space;
-	if ((end <= base) || (end > top_address_space)) {
-		valid = false;
+	bool present = true;
+	uint32_t sz;
+	uint64_t end = mr_base_gpa + mr_size, address = mr_base_gpa;
+
+	while (address < end) {
+		if (local_gpa2hpa(vm, address, &sz) == INVALID_HPA) {
+			present = false;
+			break;
+		}
+		address += sz;
 	}
 
-	return valid;
+	return present;
 }
 
 void destroy_ept(struct acrn_vm *vm)
@@ -171,56 +187,41 @@ void ept_del_mr(struct acrn_vm *vm, uint64_t *pml4_page, uint64_t gpa, uint64_t 
  */
 void ept_flush_leaf_page(uint64_t *pge, uint64_t size)
 {
-	uint64_t flush_base_hpa = INVALID_HPA, flush_end_hpa;
-	void *hva = NULL;
-	uint64_t flush_size = size;
+	uint64_t base_hpa, end_hpa;
 	uint64_t sw_sram_bottom, sw_sram_top;
 
 	if ((*pge & EPT_MT_MASK) != EPT_UNCACHED) {
-		flush_base_hpa = (*pge & (~(size - 1UL)));
-		flush_end_hpa = flush_base_hpa + size;
+		base_hpa = (*pge & (~(size - 1UL)));
+		end_hpa = base_hpa + size;
 
 		 sw_sram_bottom = get_software_sram_base();
 		 sw_sram_top = sw_sram_bottom + get_software_sram_size();
 		/* When Software SRAM is not initialized, both sw_sram_bottom and sw_sram_top is 0,
-		 * so the below if/else will have no use
+		 * so the first if below will have no use.
 		 */
-		if (flush_base_hpa < sw_sram_bottom) {
-			/* Only flush [flush_base_hpa, sw_sram_bottom) and [sw_sram_top, flush_base_hpa),
-			 * ignore [sw_sram_bottom, sw_sram_top)
+		if (base_hpa < sw_sram_bottom) {
+			/*
+			 * For end_hpa < sw_sram_bottom, flush [base_hpa, end_hpa);
+			 * For end_hpa >= sw_sram_bottom && end_hpa < sw_sram_top, flush [base_hpa, sw_sram_bottom);
+			 * For end_hpa > sw_sram_top, flush [base_hpa, sw_sram_bottom) first,
+			 *                            flush [sw_sram_top, end_hpa) in the next if condition
 			 */
-			if (flush_end_hpa > sw_sram_top) {
-				/* Only flush [flush_base_hpa, sw_sram_bottom) and [sw_sram_top, flush_base_hpa),
-				 * ignore [sw_sram_bottom, sw_sram_top)
-				 */
-				flush_size = sw_sram_bottom - flush_base_hpa;
-				hva = hpa2hva(flush_base_hpa);
-				stac();
-				flush_address_space(hva, flush_size);
-				clac();
-
-				flush_size = flush_end_hpa - sw_sram_top;
-				flush_base_hpa = sw_sram_top;
-			} else if (flush_end_hpa > sw_sram_bottom) {
-				/* Only flush [flush_base_hpa, sw_sram_bottom)
-				 * and ignore [sw_sram_bottom, flush_end_hpa)
-				 */
-				flush_size = sw_sram_bottom - flush_base_hpa;
-			}
-		} else if (flush_base_hpa < sw_sram_top) {
-			if (flush_end_hpa <= sw_sram_top) {
-				flush_size = 0UL;
-			} else {
-				/* Only flush [sw_sram_top, flush_end_hpa) and ignore [flush_base_hpa, sw_sram_top) */
-				flush_base_hpa = sw_sram_top;
-				flush_size = flush_end_hpa - sw_sram_top;
-			}
+			stac();
+			flush_address_space(hpa2hva(base_hpa), min(end_hpa, sw_sram_bottom) - base_hpa);
+			clac();
 		}
 
-		hva = hpa2hva(flush_base_hpa);
-		stac();
-		flush_address_space(hva, flush_size);
-		clac();
+		if (end_hpa > sw_sram_top) {
+			/*
+			 * For base_hpa > sw_sram_top, flush [base_hpa, end_hpa);
+			 * For base_hpa >= sw_sram_bottom && base_hpa < sw_sram_top, flush [sw_sram_top, end_hpa);
+			 * For base_hpa < sw_sram_bottom, flush [sw_sram_top, end_hpa) here,
+			 *                            flush [base_hpa, sw_sram_bottom) in the below if condition
+			 */
+			stac();
+			flush_address_space(hpa2hva(max(base_hpa, sw_sram_top)), end_hpa - max(base_hpa, sw_sram_top));
+			clac();
+		}
 	}
 }
 
@@ -293,4 +294,9 @@ void walk_ept_table(struct acrn_vm *vm, pge_handler cb)
 			}
 		}
 	}
+}
+
+struct page *alloc_ept_page(struct acrn_vm *vm)
+{
+	return alloc_page(vm->arch_vm.ept_mem_ops.pool);
 }

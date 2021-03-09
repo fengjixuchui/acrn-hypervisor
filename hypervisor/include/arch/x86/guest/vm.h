@@ -107,6 +107,7 @@ struct vm_arch {
 	 * but Normal World can not access Secure World's memory.
 	 */
 	void *sworld_eptp;
+	void *sworld_memory_base_hva;
 	struct memory_ops ept_mem_ops;
 
 	struct acrn_vioapics vioapics;	/* Virtual IOAPIC/s */
@@ -115,6 +116,18 @@ struct vm_arch {
 	struct acrn_hyperv hyperv;
 #endif
 	enum vm_vlapic_mode vlapic_mode; /* Represents vLAPIC mode across vCPUs*/
+
+	/*
+	 * Keylocker spec 4.5:
+	 * Bit 0 - Backup/restore valid.
+	 * Bit 1 - Reserved.
+	 * Bit 2 - Backup key storage read/write error.
+	 * Bit 3 - IWKeyBackup consumed.
+	 * Bit 63:4 - Reserved.
+	 */
+	uint64_t iwkey_backup_status;
+	spinlock_t iwkey_backup_lock;	/* Spin-lock used to protect internal key backup/restore */
+	struct iwkey iwkey_backup;
 
 	/* reference to virtual platform to come here (as needed) */
 } __aligned(PAGE_SIZE);

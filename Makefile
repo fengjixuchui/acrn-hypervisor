@@ -54,15 +54,14 @@ else
   endif
 endif
 
-BOARD ?= kbl-nuc-i7
-
-ifeq ($(BOARD), apl-nuc)
-  override BOARD := nuc6cayh
-else ifeq ($(BOARD), kbl-nuc-i7)
-  override BOARD := nuc7i7dnb
+# Backward-compatibility for RELEASE=(0|1)
+ifeq ($(RELEASE),1)
+  override RELEASE := y
+else
+  ifeq ($(RELEASE),0)
+    override RELEASE := n
+  endif
 endif
-
-SCENARIO ?= industry
 
 O ?= build
 ROOT_OUT := $(shell mkdir -p $(O);cd $(O);pwd)
@@ -74,8 +73,6 @@ BUILD_VERSION ?=
 BUILD_TAG ?=
 HV_CFG_LOG = $(HV_OUT)/cfg.log
 VM_CONFIGS_DIR = $(T)/misc/config_tools
-
-export TOOLS_OUT BOARD SCENARIO RELEASE
 
 .PHONY: all hypervisor devicemodel tools doc
 all: hypervisor devicemodel tools
@@ -95,17 +92,29 @@ define install_acrn_debug
 	$(MAKE) -C $(T)/hypervisor HV_OBJDIR=$(HV_OUT)/$(1) BOARD=$(1) SCENARIO=$(2) RELEASE=$(RELEASE) install-debug
 endef
 
+HV_MAKEOPTS := -C $(T)/hypervisor BOARD=$(BOARD) SCENARIO=$(SCENARIO) HV_OBJDIR=$(HV_OUT) RELEASE=$(RELEASE)
+
 hypervisor:
-	$(MAKE) -C $(T)/hypervisor BOARD=$(BOARD) SCENARIO=$(SCENARIO) HV_OBJDIR=$(HV_OUT) RELEASE=$(RELEASE)
-	@echo -e "\n\033[47;30mACRN Configuration Summary:\033[0m \nBOARD = $(BOARD)\t SCENARIO = $(SCENARIO)" > $(HV_CFG_LOG); \
-	echo -e "BUILD type = \c" >> $(HV_CFG_LOG); \
-	if [ "$(RELEASE)" = "0" ]; then echo -e "DEBUG" >> $(HV_CFG_LOG); else echo -e "RELEASE" >> $(HV_CFG_LOG); fi; \
-	echo -e "VM configuration is based on:" >> $(HV_CFG_LOG); \
-	echo -e "\tSource code at:\t\t\t$(HV_OUT)/configs" >> $(HV_CFG_LOG);
+	$(MAKE) $(HV_MAKEOPTS)
+	@echo -e "ACRN Configuration Summary:" > $(HV_CFG_LOG)
+	@$(MAKE) showconfig $(HV_MAKEOPTS) -s >> $(HV_CFG_LOG)
 	@cat $(HV_CFG_LOG)
 
+# Targets that manipulate hypervisor configurations
+hvdefconfig:
+	@$(MAKE) defconfig $(HV_MAKEOPTS)
+
+hvshowconfig:
+	@$(MAKE) showconfig $(HV_MAKEOPTS) -s
+
+hvdiffconfig:
+	@$(MAKE) diffconfig $(HV_MAKEOPTS)
+
+hvapplydiffconfig:
+	@$(MAKE) applydiffconfig $(HV_MAKEOPTS) PATCH=$(abspath $(PATCH))
+
 devicemodel: tools
-	$(MAKE) -C $(T)/devicemodel DM_OBJDIR=$(DM_OUT) DM_BUILD_VERSION=$(BUILD_VERSION) DM_BUILD_TAG=$(BUILD_TAG) DM_ASL_COMPILER=$(ASL_COMPILER) RELEASE=$(RELEASE)
+	$(MAKE) -C $(T)/devicemodel DM_OBJDIR=$(DM_OUT) DM_BUILD_VERSION=$(BUILD_VERSION) DM_BUILD_TAG=$(BUILD_TAG) DM_ASL_COMPILER=$(ASL_COMPILER) TOOLS_OUT=$(TOOLS_OUT) RELEASE=$(RELEASE)
 
 tools:
 	mkdir -p $(TOOLS_OUT)
@@ -124,10 +133,10 @@ clean:
 install: hypervisor-install devicemodel-install tools-install
 
 hypervisor-install:
-	$(MAKE) -C $(T)/hypervisor HV_OBJDIR=$(HV_OUT) BOARD=$(BOARD) SCENARIO=$(SCENARIO) RELEASE=$(RELEASE) install
+	$(MAKE) $(HV_MAKEOPTS) install
 
 hypervisor-install-debug:
-	$(MAKE) -C $(T)/hypervisor HV_OBJDIR=$(HV_OUT) BOARD=$(BOARD) SCENARIO=$(SCENARIO) RELEASE=$(RELEASE) install-debug
+	$(MAKE) $(HV_MAKEOPTS) install-debug
 
 kbl-nuc-i7-industry:
 	$(call build_acrn,nuc7i7dnb,industry)
